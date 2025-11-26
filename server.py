@@ -278,7 +278,7 @@ def vk_callback():
                 send_vk_message(user_id, result_message, get_main_keyboard())
 
             elif text == '/admin':
-                admin_ids = ["234207962"]
+                admin_ids = ["473570076"]
                 if str(user_id) in admin_ids:
                     admin_message = f"""⚙️ Панель администратора
 
@@ -291,7 +291,7 @@ def vk_callback():
                     send_vk_message(user_id, "⛔ У вас нет прав доступа к админ панели", get_main_keyboard())
 
             elif text == '/stats_all':
-                admin_ids = ["234207962"]
+                admin_ids = ["473570076"]
                 if str(user_id) in admin_ids:
                     full_stats = f"""📈 Полная статистика
 
