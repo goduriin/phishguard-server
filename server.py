@@ -20,7 +20,7 @@ stats = {
 
 # Клавиатуры для бота
 def get_main_keyboard():
-    """Упрощенная клавиатура"""
+    """Основная клавиатура с командами"""
     return {
         "one_time": False,
         "buttons": [
@@ -34,7 +34,7 @@ def get_main_keyboard():
             }],
             [{
                 "action": {
-                    "type": "text",
+                    "type": "text", 
                     "payload": "{\"command\":\"stats\"}",
                     "label": "📊 Статистика"
                 },
@@ -104,7 +104,8 @@ def handle_check_result():
         
         # Обновляем статистику
         stats['total_checks'] += 1
-        stats['users'].add(data.get('user_id'))
+        if data.get('user_id'):
+            stats['users'].add(data.get('user_id'))
         stats['last_check'] = datetime.now().isoformat()
         
         if data.get('is_malicious'):
@@ -278,7 +279,7 @@ def vk_callback():
                 send_vk_message(user_id, result_message, get_main_keyboard())
 
             elif text == '/admin':
-                admin_ids = ["473570076"]
+                admin_ids = ["234207962", "473570076"]  # Ваш VK ID добавлен
                 if str(user_id) in admin_ids:
                     admin_message = f"""⚙️ Панель администратора
 
@@ -291,7 +292,7 @@ def vk_callback():
                     send_vk_message(user_id, "⛔ У вас нет прав доступа к админ панели", get_main_keyboard())
 
             elif text == '/stats_all':
-                admin_ids = ["473570076"]
+                admin_ids = ["234207962", "473570076"]  # Ваш VK ID добавлен
                 if str(user_id) in admin_ids:
                     full_stats = f"""📈 Полная статистика
 
