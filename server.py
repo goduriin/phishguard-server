@@ -15,7 +15,8 @@ stats = {
     'total_checks': 0,
     'malicious_count': 0,
     'users': set(),
-    'last_check': None
+    'last_check': None,
+    'malicious_links': []  # Только подозрительные ссылки
 }
 
 # Клавиатуры для бота
@@ -43,10 +44,10 @@ def get_main_keyboard():
             [{
                 "action": {
                     "type": "text", 
-                    "payload": "{\"command\":\"stats_links\"}",
-                    "label": "🔗 Мои ссылки"
+                    "payload": "{\"command\":\"malicious_links\"}",
+                    "label": "🚫 Опасные ссылки"
                 },
-                "color": "secondary"
+                "color": "negative"
             }],
             [{
                 "action": {
@@ -124,30 +125,46 @@ def handle_check_result():
             stats['users'].add(data.get('user_id'))
         stats['last_check'] = datetime.now().isoformat()
         
-        if data.get('is_malicious'):
-            stats['malicious_count'] += 1
-        
-        # Проверка данных
-        if not data or not data.get('user_id') or not data.get('url'):
-            return jsonify({"error": "Invalid data"}), 400
-        
         user_id = data['user_id']
         url = data['url']
         is_malicious = data.get('is_malicious', False)
         
-        # Формируем сообщение
+        # Если ссылка опасная - отправляем уведомление
         if is_malicious:
-            message = f"⚠️ ФИШИНГ ОБНАРУЖЕН!\n\nОпасная ссылка: {url}\n\n🚫 НЕ ПЕРЕХОДИТЕ по этой ссылке!"
+            stats['malicious_count'] += 1
+            
+            # Сохраняем опасную ссылку
+            malicious_data = {
+                'url': url,
+                'domain': extract_domain(url),
+                'timestamp': datetime.now().isoformat(),
+                'user_id': user_id
+            }
+            stats['malicious_links'].append(malicious_data)
+            
+            # Ограничиваем историю 50 записями
+            if len(stats['malicious_links']) > 50:
+                stats['malicious_links'] = stats['malicious_links'][-50:]
+            
+            # Отправляем уведомление об опасной ссылке
+            message = f"""🚨 ФИШИНГ ОБНАРУЖЕН!
+
+📌 Опасная ссылка: {url}
+🌐 Домен: {extract_domain(url)}
+🕒 Время обнаружения: {datetime.now().strftime('%H:%M:%S')}
+
+🚫 НЕ ПЕРЕХОДИТЕ по этой ссылке!
+⚠️ Это может быть фишинг или мошенничество!"""
+            
+            success = send_vk_message(user_id, message, get_main_keyboard())
+            
+            if success:
+                return jsonify({"status": "success", "malicious_detected": True})
+            else:
+                return jsonify({"error": "Failed to send VK message"}), 500
         else:
-            message = f"✅ Ссылка безопасна\n\nПроверенная ссылка: {url}"
-        
-        # Отправляем в VK
-        success = send_vk_message(user_id, message, get_main_keyboard())
-        
-        if success:
-            return jsonify({"status": "success"})
-        else:
-            return jsonify({"error": "Failed to send VK message"}), 500
+            # Безопасные ссылки просто логируем
+            return jsonify({"status": "success", "malicious_detected": False})
         
     except Exception as e:
         print(f"❌ Error: {e}")
@@ -166,35 +183,11 @@ def handle_link_report():
             stats['users'].add(data.get('user_id'))
         stats['last_check'] = datetime.now().isoformat()
         
-        # Добавляем в историю ссылок (новое!)
-        if 'link_history' not in stats:
-            stats['link_history'] = []
-        
-        # Сохраняем ссылку в историю (макс 100 последних)
-        link_data = {
-            'url': data.get('url'),
-            'domain': extract_domain(data.get('url')),
-            'timestamp': datetime.now().isoformat(),
-            'source': data.get('source', 'unknown'),
-            'is_malicious': data.get('is_malicious', False)
-        }
-        
-        stats['link_history'].append(link_data)
-        # Ограничиваем историю 100 записями
-        if len(stats['link_history']) > 100:
-            stats['link_history'] = stats['link_history'][-100:]
-        
-        # НЕ отправляем сообщение для каждой ссылки
-        # Вместо этого просто логируем для статистики
+        # Только логируем для статистики, не отправляем сообщения
         
         return jsonify({
             "status": "success", 
-            "message": "Link saved to statistics",
-            "stats": {
-                "total_links": len(stats.get('link_history', [])),
-                "user_links": len([l for l in stats.get('link_history', []) 
-                                 if l.get('source') == data.get('source')])
-            }
+            "message": "Link saved to statistics"
         })
         
     except Exception as e:
@@ -214,17 +207,10 @@ def check_url_safety(url):
     try:
         API_KEY = "4d023472b5d0cb0b76552c63c9e0668b2dcf32f6f9fcb0ffb5298049732b8096"
         
-        # 1. Создаем анализ URL
-        formData = {
-            'url': url,
-            'apikey': API_KEY
-        }
-        
-        # Имитация проверки (замените на реальный VirusTotal API)
-        # В реальности здесь будет вызов VirusTotal API
+        # Имитация проверки
         import random
         import time
-        time.sleep(2)  # Имитация задержки проверки
+        time.sleep(2)
         
         # Случайный результат для демонстрации
         is_safe = random.choice([True, True, True, False])  # 75% безопасных
@@ -235,9 +221,6 @@ def check_url_safety(url):
                 'engine_results': {
                     'clean': 65 if is_safe else 15,
                     'malicious': 2 if is_safe else 48
-                } if is_safe else {
-                    'clean': 15,
-                    'malicious': 48
                 }
             }
         }
@@ -278,8 +261,8 @@ def vk_callback():
                         text = '/start'
                     elif command == 'stats_all':
                         text = '/stats_all'
-                    elif command == 'stats_links':
-                        text = '/stats_links'
+                    elif command == 'malicious_links':
+                        text = '/malicious_links'
                     elif command == 'check':
                         text = '/check'
                 except Exception as e:
@@ -291,15 +274,14 @@ def vk_callback():
 🛡️ **Автоматическая защита:**
 • Расширение проверяет все ссылки в ленте VK
 • Опасные ссылки сразу блокируются
-• Вся статистика сохраняется
+• Вы получаете уведомления только об угрозах
+
+📊 **Статистика и отчеты:**
+• /stats - общая статистика проверок
+• /malicious_links - список опасных ссылок
 
 🔍 **Ручная проверка:**
 Отправьте мне любую ссылку или используйте /check
-
-📊 **Статистика:**
-• /stats - общая статистика
-• /stats_links - ваши ссылки
-• /links_all - список всех ссылок
 
 ⚡ **Для автоматической работы установите наше расширение!**"""
                 send_vk_message(user_id, welcome_message, get_main_keyboard())
@@ -312,11 +294,15 @@ def vk_callback():
 🔍 КАК ЭТО РАБОТАЕТ:
 1. Установите расширение в Google Chrome
 2. При посещении VK расширение проверяет все ссылки  
-3. Если найдена фишинговая ссылка - я пришлю уведомление
+3. При обнаружении фишинга - вы получите уведомление
+4. Все безопасные ссылки сохраняются в статистике
 
-⚠️ ВАЖНО: Расширение работает только в Google Chrome!
+📊 КОМАНДЫ:
+• /stats - статистика проверок
+• /malicious_links - опасные ссылки
+• /check URL - проверить ссылку
 
-🚫 Будьте осторожны с подозрительными ссылками!"""
+⚠️ ВАЖНО: Расширение работает только в Google Chrome!"""
                 send_vk_message(user_id, help_message, get_main_keyboard())
                 
             elif text == '/stats':
@@ -325,58 +311,30 @@ def vk_callback():
 Всего проверок: {stats['total_checks']}
 Обнаружено угроз: {stats['malicious_count']}
 Уникальных пользователей: {len(stats['users'])}
-Последняя проверка: {stats['last_check'] or 'еще не было'}"""
+Последняя проверка: {stats['last_check'] or 'еще не было'}
+
+💡 Система работает в фоновом режиме
+🚫 Уведомления приходят только об опасных ссылках"""
                 send_vk_message(user_id, stats_message, get_main_keyboard())
 
-            elif text == '/test_buttons':
-                test_message = "Тест кнопок - если видите кнопки ниже, значит все работает!"
-                send_vk_message(user_id, test_message, get_main_keyboard())
-
-            # Новые команды для статистики ссылок
-            elif text == '/stats_links':
-                user_links = [link for link in stats.get('link_history', []) 
-                             if link.get('source', '').endswith(str(user_id))]
+            elif text == '/malicious_links':
+                user_malicious_links = [link for link in stats.get('malicious_links', []) 
+                                      if link.get('user_id') == str(user_id)]
                 
-                if not user_links:
-                    stats_message = "📊 У вас пока нет сохраненных ссылок\n\nНачните просматривать ленту VK с включенным расширением!"
+                if not user_malicious_links:
+                    message = "✅ Отлично! Опасных ссылок не обнаружено\n\nСистема продолжает мониторинг вашей ленты VK"
                 else:
-                    # Группируем по доменам
-                    from collections import Counter
-                    domains = Counter([link['domain'] for link in user_links])
-                    
-                    stats_message = f"""📊 Ваша статистика ссылок
+                    message = f"""🚫 Обнаружено опасных ссылок: {len(user_malicious_links)}
 
-Всего ссылок: {len(user_links)}
-Проверено: {stats['total_checks']}
-Обнаружено угроз: {stats['malicious_count']}
-
-🏷️ Топ доменов:
+📋 Список опасных ссылок:
 """
-                    for domain, count in domains.most_common(5):
-                        stats_message += f"• {domain}: {count} ссылок\n"
+                    for i, link in enumerate(user_malicious_links[-10:], 1):  # последние 10
+                        time_str = datetime.fromisoformat(link['timestamp']).strftime('%d.%m %H:%M')
+                        message += f"{i}. {link['domain']} ({time_str})\n"
                     
-                    stats_message += f"\n📋 Последние 5 ссылок:\n"
-                    for link in user_links[-5:]:
-                        emoji = "⚠️" if link['is_malicious'] else "🔗"
-                        stats_message += f"{emoji} {link['domain']}\n"
+                    message += f"\n⚠️ Всего обнаружено: {len(user_malicious_links)} опасных ссылок"
                 
-                send_vk_message(user_id, stats_message, get_main_keyboard())
-
-            elif text == '/links_all':
-                user_links = [link for link in stats.get('link_history', []) 
-                             if link.get('source', '').endswith(str(user_id))]
-                
-                if not user_links:
-                    send_vk_message(user_id, "📭 У вас пока нет сохраненных ссылок")
-                else:
-                    # Показываем все ссылки с пагинацией
-                    message = "📋 Все ваши ссылки:\n\n"
-                    for i, link in enumerate(user_links[-10:], 1):  # последние 10
-                        status = "⚠️ ОПАСНО" if link['is_malicious'] else "✅ безопасно"
-                        message += f"{i}. {link['domain']} - {status}\n"
-                    
-                    message += f"\nВсего: {len(user_links)} ссылок\nИспользуйте /stats_links для статистики"
-                    send_vk_message(user_id, message, get_main_keyboard())
+                send_vk_message(user_id, message, get_main_keyboard())
 
             # Ручная проверка ссылок
             elif text.startswith('/check ') or (text.startswith('http') and not text.startswith('/')):
@@ -434,21 +392,9 @@ def vk_callback():
 ⚠️ Это может быть фишинг или мошенничество!"""
                 
                 send_vk_message(user_id, result_message, get_main_keyboard())
-                
-                # Сохраняем в статистику
-                if 'link_history' not in stats:
-                    stats['link_history'] = []
-                
-                stats['link_history'].append({
-                    'url': url,
-                    'domain': extract_domain(url),
-                    'timestamp': datetime.now().isoformat(),
-                    'source': f"manual_check_{user_id}",
-                    'is_malicious': not result['is_safe']
-                })
 
             elif text == '/admin':
-                admin_ids = ["234207962", "473570076"]  # Ваш VK ID добавлен
+                admin_ids = ["234207962", "473570076"]
                 if str(user_id) in admin_ids:
                     admin_message = f"""⚙️ Панель администратора
 
@@ -461,7 +407,7 @@ def vk_callback():
                     send_vk_message(user_id, "⛔ У вас нет прав доступа к админ панели", get_main_keyboard())
 
             elif text == '/stats_all':
-                admin_ids = ["234207962", "473570076"]  # Ваш VK ID добавлен
+                admin_ids = ["234207962", "473570076"]
                 if str(user_id) in admin_ids:
                     full_stats = f"""📈 Полная статистика
 
@@ -493,7 +439,6 @@ def send_vk_message(user_id, message, keyboard=None):
     try:
         print(f"📤 Sending message to user {user_id}")
         
-        # Базовые параметры
         params = {
             'user_id': int(user_id),
             'message': message,
@@ -502,13 +447,9 @@ def send_vk_message(user_id, message, keyboard=None):
             'v': '5.199'
         }
         
-        # Добавляем клавиатуру если она есть
         if keyboard:
             keyboard_json = json.dumps(keyboard, ensure_ascii=False)
-            print(f"⌨️ Keyboard JSON: {keyboard_json}")
             params['keyboard'] = keyboard_json
-        
-        print(f"🔧 Request params (без токена): { {k: v for k, v in params.items() if k != 'access_token'} }")
         
         response = requests.post(
             'https://api.vk.com/method/messages.send',
