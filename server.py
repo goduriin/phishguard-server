@@ -6,9 +6,9 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# Конфигурация
-VK_TOKEN = os.environ.get('VK_TOKEN', 'vk1.a.MI3dYhsBx8lgRdWjzrvVSHWxhTYt9-BDA9TXKbW3wCyb8m8yUO3O8SR_m6QVWtkBt49cu2iQ_BY3gR0DjTFGokcZgjyCQROJJG4VZmGdoKwOu3ZiyjI58L7eApBx2tOq_rU6IYs33OWbR__lglk3fcp2_eOGP6Z9Oamb-vC-JltZ0fLukc96G8s_C-8g6hS4jOFw0CTWYhoWKKe7af1-vw')
-SECRET_KEY = os.environ.get('SECRET_KEY', 'phishguard_secret_key_2024')
+# Конфигурация из переменных окружения
+VK_TOKEN = os.environ.get('VK_TOKEN')
+SECRET_KEY = os.environ.get('SECRET_KEY')
 
 # Глобальные переменные для статистики
 stats = {
@@ -20,38 +20,26 @@ stats = {
 
 # Клавиатуры для бота
 def get_main_keyboard():
-    """Основная клавиатура с командами"""
+    """Упрощенная клавиатура"""
     return {
         "one_time": False,
         "buttons": [
-            [
-                {
-                    "action": {
-                        "type": "text",
-                        "payload": "{\"button\": \"1\"}",
-                        "label": "🛡️ Помощь"
-                    },
-                    "color": "primary"
-                }
-            ],
-            [
-                {
-                    "action": {
-                        "type": "text", 
-                        "payload": "{\"button\": \"2\"}",
-                        "label": "📊 Статистика"
-                    },
-                    "color": "secondary"
+            [{
+                "action": {
+                    "type": "text",
+                    "payload": "{\"command\":\"help\"}",
+                    "label": "🛡️ Помощь"
                 },
-                {
-                    "action": {
-                        "type": "text",
-                        "payload": "{\"button\": \"3\"}",
-                        "label": "🔍 Проверить ссылку"
-                    },
-                    "color": "positive"
-                }
-            ]
+                "color": "primary"
+            }],
+            [{
+                "action": {
+                    "type": "text",
+                    "payload": "{\"command\":\"stats\"}",
+                    "label": "📊 Статистика"
+                },
+                "color": "positive"
+            }]
         ]
     }
 
@@ -60,16 +48,14 @@ def get_check_keyboard():
     return {
         "one_time": True,
         "buttons": [
-            [
-                {
-                    "action": {
-                        "type": "text",
-                        "payload": "{\"button\": \"back\"}",
-                        "label": "⬅️ Назад"
-                    },
-                    "color": "secondary"
-                }
-            ]
+            [{
+                "action": {
+                    "type": "text",
+                    "payload": "{\"command\":\"back\"}",
+                    "label": "⬅️ Назад"
+                },
+                "color": "secondary"
+            }]
         ]
     }
 
@@ -78,26 +64,22 @@ def get_admin_keyboard():
     return {
         "one_time": False,
         "buttons": [
-            [
-                {
-                    "action": {
-                        "type": "text",
-                        "payload": "{\"button\": \"stats_all\"}",
-                        "label": "📈 Полная статистика"
-                    },
-                    "color": "primary"
-                }
-            ],
-            [
-                {
-                    "action": {
-                        "type": "text",
-                        "payload": "{\"button\": \"back\"}",
-                        "label": "⬅️ Назад в меню"
-                    },
-                    "color": "secondary"
-                }
-            ]
+            [{
+                "action": {
+                    "type": "text",
+                    "payload": "{\"command\":\"stats_all\"}",
+                    "label": "📈 Полная статистика"
+                },
+                "color": "primary"
+            }],
+            [{
+                "action": {
+                    "type": "text",
+                    "payload": "{\"command\":\"back\"}",
+                    "label": "⬅️ Назад в меню"
+                },
+                "color": "secondary"
+            }]
         ]
     }
 
@@ -159,28 +141,38 @@ def send_vk_message(user_id, message, keyboard=None):
     try:
         print(f"📤 Sending message to user {user_id}")
         
-        data = {
-            'user_id': user_id,
+        # Базовые параметры
+        params = {
+            'user_id': int(user_id),
             'message': message,
-            'random_id': 0,
+            'random_id': int(datetime.now().timestamp() * 1000),
             'access_token': VK_TOKEN,
-            'v': '5.131'
+            'v': '5.199'
         }
         
         # Добавляем клавиатуру если она есть
         if keyboard:
-            data['keyboard'] = json.dumps(keyboard)
+            keyboard_json = json.dumps(keyboard, ensure_ascii=False)
+            print(f"⌨️ Keyboard JSON: {keyboard_json}")
+            params['keyboard'] = keyboard_json
+        
+        print(f"🔧 Request params (без токена): { {k: v for k, v in params.items() if k != 'access_token'} }")
         
         response = requests.post(
             'https://api.vk.com/method/messages.send',
-            data=data,
+            data=params,
             timeout=10
         )
         
         result = response.json()
         print(f"📩 VK API response: {result}")
         
-        return 'error' not in result
+        if 'error' in result:
+            error = result['error']
+            print(f"❌ VK API Error {error.get('error_code')}: {error.get('error_msg')}")
+            return False
+            
+        return True
             
     except Exception as e:
         print(f"❌ Send message error: {e}")
@@ -206,21 +198,20 @@ def vk_callback():
             
             # Обработка нажатий кнопок
             if payload:
-                payload_data = json.loads(payload)
-                button = payload_data.get('button', '')
-                
-                if button == '1':
-                    text = '/help'
-                elif button == '2':
-                    text = '/stats'
-                elif button == '3':
-                    check_message = "Введите ссылку для проверки:\n\nПример: https://example.com\nИли просто отправьте ссылку"
-                    send_vk_message(user_id, check_message, get_check_keyboard())
-                    return 'ok'
-                elif button == 'back':
-                    text = '/start'
-                elif button == 'stats_all':
-                    text = '/stats_all'
+                try:
+                    payload_data = json.loads(payload)
+                    command = payload_data.get('command', '')
+                    
+                    if command == 'help':
+                        text = '/help'
+                    elif command == 'stats':
+                        text = '/stats'
+                    elif command == 'back':
+                        text = '/start'
+                    elif command == 'stats_all':
+                        text = '/stats_all'
+                except Exception as e:
+                    print(f"❌ Payload parse error: {e}")
             
             if text == '/start':
                 welcome_message = """👋 Привет! Я бот PhishGuard!
@@ -261,6 +252,10 @@ def vk_callback():
 Последняя проверка: {stats['last_check'] or 'еще не было'}"""
                 send_vk_message(user_id, stats_message, get_main_keyboard())
 
+            elif text == '/test_buttons':
+                test_message = "Тест кнопок - если видите кнопки ниже, значит все работает!"
+                send_vk_message(user_id, test_message, get_main_keyboard())
+
             elif text.startswith('/check ') or (text.startswith('http') and not text.startswith('/')):
                 url = text.replace('/check ', '').strip()
                 if not url.startswith(('http://', 'https://')):
@@ -283,7 +278,7 @@ def vk_callback():
                 send_vk_message(user_id, result_message, get_main_keyboard())
 
             elif text == '/admin':
-                admin_ids = ["234207962"]  # Ваш VK ID
+                admin_ids = ["234207962"]
                 if str(user_id) in admin_ids:
                     admin_message = f"""⚙️ Панель администратора
 
@@ -296,7 +291,7 @@ def vk_callback():
                     send_vk_message(user_id, "⛔ У вас нет прав доступа к админ панели", get_main_keyboard())
 
             elif text == '/stats_all':
-                admin_ids = ["234207962"]  # Ваш VK ID
+                admin_ids = ["234207962"]
                 if str(user_id) in admin_ids:
                     full_stats = f"""📈 Полная статистика
 
@@ -333,6 +328,22 @@ def debug_env():
         "VK_TOKEN_set": bool(os.environ.get('VK_TOKEN')),
         "SECRET_KEY_set": bool(os.environ.get('SECRET_KEY'))
     })
+
+# Тестовый endpoint для проверки токена
+@app.route('/test-token')
+def test_token():
+    """Проверка токена VK"""
+    try:
+        response = requests.post(
+            'https://api.vk.com/method/groups.getById',
+            data={
+                'access_token': VK_TOKEN,
+                'v': '5.199'
+            }
+        )
+        return jsonify(response.json())
+    except Exception as e:
+        return jsonify({"error": str(e)})
 
 if __name__ == '__main__':
     print("🚀 Starting PhishGuard Server...")
