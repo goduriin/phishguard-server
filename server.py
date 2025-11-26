@@ -1,8 +1,9 @@
 from flask import Flask, request, jsonify
 import requests
 import os
-import json
+import json 
 from datetime import datetime
+from collections import Counter
 
 app = Flask(__name__)
 
@@ -16,7 +17,8 @@ stats = {
     'malicious_count': 0,
     'users': set(),
     'last_check': None,
-    'malicious_links': []  # Только подозрительные ссылки
+    'malicious_links': [],  # Только подозрительные ссылки
+    'link_history': []      # История всех ссылок
 }
 
 # Клавиатуры для бота
@@ -60,46 +62,6 @@ def get_main_keyboard():
         ]
     }
 
-def get_check_keyboard():
-    """Клавиатура для проверки ссылок"""
-    return {
-        "one_time": True,
-        "buttons": [
-            [{
-                "action": {
-                    "type": "text",
-                    "payload": "{\"command\":\"back\"}",
-                    "label": "⬅️ Назад"
-                },
-                "color": "secondary"
-            }]
-        ]
-    }
-
-def get_admin_keyboard():
-    """Клавиатура для админа"""
-    return {
-        "one_time": False,
-        "buttons": [
-            [{
-                "action": {
-                    "type": "text",
-                    "payload": "{\"command\":\"stats_all\"}",
-                    "label": "📈 Полная статистика"
-                },
-                "color": "primary"
-            }],
-            [{
-                "action": {
-                    "type": "text",
-                    "payload": "{\"command\":\"back\"}",
-                    "label": "⬅️ Назад в меню"
-                },
-                "color": "secondary"
-            }]
-        ]
-    }
-
 @app.route('/')
 def home():
     return jsonify({
@@ -117,7 +79,7 @@ def handle_check_result():
     """Принимает результаты проверки от расширения"""
     try:
         data = request.json
-        print(f"📨 Received data from extension: {data}")
+        print(f"📨 Received check result: {data}")
         
         # Обновляем статистику
         stats['total_checks'] += 1
@@ -151,7 +113,7 @@ def handle_check_result():
 
 📌 Опасная ссылка: {url}
 🌐 Домен: {extract_domain(url)}
-🕒 Время обнаружения: {datetime.now().strftime('%H:%M:%S')}
+🕒 Время обнаружения: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}
 
 🚫 НЕ ПЕРЕХОДИТЕ по этой ссылке!
 ⚠️ Это может быть фишинг или мошенничество!"""
@@ -167,7 +129,7 @@ def handle_check_result():
             return jsonify({"status": "success", "malicious_detected": False})
         
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Error in check-result: {e}")
         return jsonify({"error": "Internal server error"}), 500
 
 @app.route('/api/report-link', methods=['POST'])
@@ -183,7 +145,20 @@ def handle_link_report():
             stats['users'].add(data.get('user_id'))
         stats['last_check'] = datetime.now().isoformat()
         
-        # Только логируем для статистики, не отправляем сообщения
+        # Сохраняем в историю ссылок
+        link_data = {
+            'url': data.get('url'),
+            'domain': extract_domain(data.get('url')),
+            'timestamp': datetime.now().isoformat(),
+            'source': data.get('source', 'unknown'),
+            'user_id': data.get('user_id'),
+            'is_malicious': data.get('is_malicious', False)
+        }
+        
+        stats['link_history'].append(link_data)
+        # Ограничиваем историю 200 записями
+        if len(stats['link_history']) > 200:
+            stats['link_history'] = stats['link_history'][-200:]
         
         return jsonify({
             "status": "success", 
@@ -198,19 +173,17 @@ def extract_domain(url):
     """Извлекает домен из URL"""
     try:
         from urllib.parse import urlparse
-        return urlparse(url).netloc
+        return urlparse(url).hostname
     except:
         return "invalid_url"
 
 def check_url_safety(url):
-    """Проверяет URL через VirusTotal API"""
+    """Проверяет URL (заглушка для тестирования)"""
     try:
-        API_KEY = "4d023472b5d0cb0b76552c63c9e0668b2dcf32f6f9fcb0ffb5298049732b8096"
-        
         # Имитация проверки
         import random
         import time
-        time.sleep(2)
+        time.sleep(1)
         
         # Случайный результат для демонстрации
         is_safe = random.choice([True, True, True, False])  # 75% безопасных
@@ -234,11 +207,11 @@ def vk_callback():
     """Обработчик Callback API для VK"""
     try:
         data = request.json
-        print(f"🔄 VK Callback: {data}")
+        print(f"🔄 VK Callback received")
         
         if data['type'] == 'confirmation':
             confirmation_code = os.environ.get('CONFIRMATION_CODE', '')
-            print(f"🔐 Returning confirmation code: {confirmation_code}")
+            print(f"🔐 Returning confirmation code")
             return confirmation_code
         
         if data['type'] == 'message_new':
@@ -257,10 +230,6 @@ def vk_callback():
                         text = '/help'
                     elif command == 'stats':
                         text = '/stats'
-                    elif command == 'back':
-                        text = '/start'
-                    elif command == 'stats_all':
-                        text = '/stats_all'
                     elif command == 'malicious_links':
                         text = '/malicious_links'
                     elif command == 'check':
@@ -289,7 +258,7 @@ def vk_callback():
             elif text == '/help':
                 help_message = """🛡️ PhishGuard - защита от фишинга
 
-Я автоматически проверяю ссылки в вашей ленте VK через VirusTotal API.
+Я автоматически проверяю ссылки в вашей ленте VK.
 
 🔍 КАК ЭТО РАБОТАЕТ:
 1. Установите расширение в Google Chrome
@@ -306,12 +275,22 @@ def vk_callback():
                 send_vk_message(user_id, help_message, get_main_keyboard())
                 
             elif text == '/stats':
+                # Форматируем время для красивого отображения
+                if stats['last_check']:
+                    try:
+                        last_check_dt = datetime.fromisoformat(stats['last_check'].replace('Z', '+00:00'))
+                        formatted_time = last_check_dt.strftime('%d.%m.%Y %H:%M:%S')
+                    except:
+                        formatted_time = stats['last_check']
+                else:
+                    formatted_time = 'еще не было'
+                
                 stats_message = f"""📊 Статистика PhishGuard
 
 Всего проверок: {stats['total_checks']}
 Обнаружено угроз: {stats['malicious_count']}
 Уникальных пользователей: {len(stats['users'])}
-Последняя проверка: {stats['last_check'] or 'еще не было'}
+Последняя проверка: {formatted_time}
 
 💡 Система работает в фоновом режиме
 🚫 Уведомления приходят только об опасных ссылках"""
@@ -328,8 +307,11 @@ def vk_callback():
 
 📋 Список опасных ссылок:
 """
-                    for i, link in enumerate(user_malicious_links[-10:], 1):  # последние 10
-                        time_str = datetime.fromisoformat(link['timestamp']).strftime('%d.%m %H:%M')
+                    for i, link in enumerate(user_malicious_links[-10:], 1):
+                        try:
+                            time_str = datetime.fromisoformat(link['timestamp'].replace('Z', '+00:00')).strftime('%d.%m.%Y %H:%M')
+                        except:
+                            time_str = link['timestamp']
                         message += f"{i}. {link['domain']} ({time_str})\n"
                     
                     message += f"\n⚠️ Всего обнаружено: {len(user_malicious_links)} опасных ссылок"
@@ -349,13 +331,13 @@ def vk_callback():
                     if not parsed.netloc:
                         raise ValueError("Invalid URL")
                 except:
-                    send_vk_message(user_id, "❌ Неверный формат ссылки. Пример: /check https://example.com")
+                    send_vk_message(user_id, "❌ Неверный формат ссылки. Пример: /check https://example.com", get_main_keyboard())
                     return 'ok'
                 
-                check_message = f"🔍 Проверяю ссылку: {url}\n\nПодождите 10-15 секунд..."
+                check_message = f"🔍 Проверяю ссылку: {url}\n\nПодождите 5-10 секунд..."
                 send_vk_message(user_id, check_message)
                 
-                # Реальная проверка
+                # Проверка
                 result = check_url_safety(url)
                 
                 if result.get('error'):
@@ -393,34 +375,6 @@ def vk_callback():
                 
                 send_vk_message(user_id, result_message, get_main_keyboard())
 
-            elif text == '/admin':
-                admin_ids = ["234207962", "473570076"]
-                if str(user_id) in admin_ids:
-                    admin_message = f"""⚙️ Панель администратора
-
-Общая статистика:
-- Пользователей: {len(stats['users'])}
-- Проверок: {stats['total_checks']}
-- Обнаружено угроз: {stats['malicious_count']}"""
-                    send_vk_message(user_id, admin_message, get_admin_keyboard())
-                else:
-                    send_vk_message(user_id, "⛔ У вас нет прав доступа к админ панели", get_main_keyboard())
-
-            elif text == '/stats_all':
-                admin_ids = ["234207962", "473570076"]
-                if str(user_id) in admin_ids:
-                    full_stats = f"""📈 Полная статистика
-
-Всего проверок: {stats['total_checks']}
-Обнаружено угроз: {stats['malicious_count']}
-Уникальных пользователей: {len(stats['users'])}
-Последняя проверка: {stats['last_check'] or 'N/A'}
-
-ID пользователей: {', '.join(list(stats['users'])[:5])}{'...' if len(stats['users']) > 5 else ''}"""
-                    send_vk_message(user_id, full_stats, get_admin_keyboard())
-                else:
-                    send_vk_message(user_id, "⛔ У вас нет прав доступа", get_main_keyboard())
-                
             else:
                 if not text.startswith('/'):
                     help_offer = """Не понял ваше сообщение 🤔
@@ -458,7 +412,6 @@ def send_vk_message(user_id, message, keyboard=None):
         )
         
         result = response.json()
-        print(f"📩 VK API response: {result}")
         
         if 'error' in result:
             error = result['error']
@@ -470,33 +423,6 @@ def send_vk_message(user_id, message, keyboard=None):
     except Exception as e:
         print(f"❌ Send message error: {e}")
         return False
-
-# Debug endpoint для проверки переменных окружения
-@app.route('/debug-env')
-def debug_env():
-    """Проверка переменных окружения"""
-    import os
-    return jsonify({
-        "CONFIRMATION_CODE": os.environ.get('CONFIRMATION_CODE', 'NOT_SET'),
-        "VK_TOKEN_set": bool(os.environ.get('VK_TOKEN')),
-        "SECRET_KEY_set": bool(os.environ.get('SECRET_KEY'))
-    })
-
-# Тестовый endpoint для проверки токена
-@app.route('/test-token')
-def test_token():
-    """Проверка токена VK"""
-    try:
-        response = requests.post(
-            'https://api.vk.com/method/groups.getById',
-            data={
-                'access_token': VK_TOKEN,
-                'v': '5.199'
-            }
-        )
-        return jsonify(response.json())
-    except Exception as e:
-        return jsonify({"error": str(e)})
 
 if __name__ == '__main__':
     print("🚀 Starting PhishGuard Server...")
