@@ -151,7 +151,7 @@ def handle_check_result():
 
 📌 Опасная ссылка: {url}
 🌐 Домен: {extract_domain(url)}
-🕒 Время обнаружения: {datetime.now().strftime('%H:%M:%S')}
+🕒 Время обнаружения: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}
 
 🚫 НЕ ПЕРЕХОДИТЕ по этой ссылке!
 ⚠️ Это может быть фишинг или мошенничество!"""
@@ -306,12 +306,24 @@ def vk_callback():
                 send_vk_message(user_id, help_message, get_main_keyboard())
                 
             elif text == '/stats':
+                # Форматируем время для красивого отображения
+                if stats['last_check']:
+                    try:
+                        # Преобразуем ISO строку в datetime объект
+                        last_check_dt = datetime.fromisoformat(stats['last_check'].replace('Z', '+00:00'))
+                        # Форматируем в читаемый вид
+                        formatted_time = last_check_dt.strftime('%d.%m.%Y %H:%M:%S')
+                    except:
+                        formatted_time = stats['last_check']
+                else:
+                    formatted_time = 'еще не было'
+                
                 stats_message = f"""📊 Статистика PhishGuard
 
 Всего проверок: {stats['total_checks']}
 Обнаружено угроз: {stats['malicious_count']}
 Уникальных пользователей: {len(stats['users'])}
-Последняя проверка: {stats['last_check'] or 'еще не было'}
+Последняя проверка: {formatted_time}
 
 💡 Система работает в фоновом режиме
 🚫 Уведомления приходят только об опасных ссылках"""
@@ -329,7 +341,10 @@ def vk_callback():
 📋 Список опасных ссылок:
 """
                     for i, link in enumerate(user_malicious_links[-10:], 1):  # последние 10
-                        time_str = datetime.fromisoformat(link['timestamp']).strftime('%d.%m %H:%M')
+                        try:
+                            time_str = datetime.fromisoformat(link['timestamp'].replace('Z', '+00:00')).strftime('%d.%m.%Y %H:%M')
+                        except:
+                            time_str = link['timestamp']
                         message += f"{i}. {link['domain']} ({time_str})\n"
                     
                     message += f"\n⚠️ Всего обнаружено: {len(user_malicious_links)} опасных ссылок"
