@@ -110,7 +110,14 @@ def vk_callback():
     except Exception as e:
         print(f"❌ Callback error: {e}")
         return 'ok'
-
+@app.route('/debug-env')
+def debug_env():
+    """Проверка переменных окружения"""
+    import os
+    return jsonify({
+        "CONFIRMATION_CODE": os.environ.get('CONFIRMATION_CODE', 'NOT_SET'),
+        "all_variables": dict(os.environ)
+    })
 # Важно: этот блок должен быть в конце файла
 if __name__ == '__main__':
     print("🚀 Запуск PhishGuard Server...")
