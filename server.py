@@ -87,19 +87,39 @@ def vk_callback():
         data = request.json
         print(f"🔄 VK Callback: {data}")
         
-        if data['type'] == 'confirmation':
-            confirmation_code = os.environ.get('CONFIRMATION_CODE', '')
-            print(f"🔐 Returning confirmation code: {confirmation_code}")
-            return confirmation_code
-        
         if data['type'] == 'message_new':
             message = data['object']['message']
             user_id = message['from_id']
             text = message['text'].lower()
-            
-            if text in ['/start', '/help']:
-                help_message = """👋 Я бот PhishGuard!"""
-                send_vk_message(user_id, help_message)
+    
+        if text == '/start':
+            welcome_message = """👋 Привет! Я бот PhishGuard!
+
+Я буду проверять ссылки в вашей ленте VK и предупреждать о фишинговых угрозах.
+
+📋 Команды:
+/help - полная справка
+/stats - статистика проверок
+
+⚡ Для автоматической работы установите наше расширение в браузере!"""
+        send_vk_message(user_id, welcome_message)
+        
+    elif text == '/help':
+        help_message = """🛡️ PhishGuard - защита от фишинга
+
+Я автоматически проверяю все ссылки в вашей ленте VK через VirusTotal API.
+
+🔍 Как это работает:
+1. Вы устанавливаете расширение в браузер
+2. При посещении VK расширение проверяет все ссылки
+3. Если найдена фишинговая ссылка - я пришлю вам уведомление
+
+📊 Команды:
+/stats - посмотреть статистику проверок
+/help - эта справка
+
+🚫 Будьте осторожны с подозрительными ссылками!"""
+        send_vk_message(user_id, help_message)
                 
         return 'ok'
         
