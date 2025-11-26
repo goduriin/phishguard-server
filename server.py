@@ -137,6 +137,70 @@ def handle_check_result():
         print(f"❌ Error: {e}")
         return jsonify({"error": "Internal server error"}), 500
 
+@app.route('/api/report-link', methods=['POST'])
+def handle_link_report():
+    """Принимает ВСЕ ссылки для отправки в бота"""
+    try:
+        data = request.json
+        print(f"📨 Received link report: {data}")
+        
+        # Обновляем статистику
+        stats['total_checks'] += 1
+        if data.get('user_id'):
+            stats['users'].add(data.get('user_id'))
+        stats['last_check'] = datetime.now().isoformat()
+        
+        # Проверка данных
+        if not data or not data.get('user_id') or not data.get('url'):
+            return jsonify({"error": "Invalid data"}), 400
+        
+        user_id = data['user_id']
+        url = data['url']
+        is_malicious = data.get('is_malicious', False)
+        source = data.get('source', 'unknown')
+        
+        # Формируем сообщение для ВСЕХ ссылок
+        if data.get('report_type') == 'all_links':
+            domain = extract_domain(url)
+            message = f"""🔗 Обнаружена ссылка в VK
+
+📌 URL: {url}
+🌐 Домен: {domain}
+📱 Источник: {source}
+🕒 Время: {datetime.now().strftime('%H:%M:%S')}
+
+{'⚠️ Ссылка помечена как опасная!' if is_malicious else '✅ Ссылка безопасна (предварительно)'}
+
+#мониторинг #ссылка"""
+        else:
+            # Старое сообщение для проверенных ссылок
+            if is_malicious:
+                message = f"⚠️ ФИШИНГ ОБНАРУЖЕН!\n\nОпасная ссылка: {url}\n\n🚫 НЕ ПЕРЕХОДИТЕ по этой ссылке!"
+            else:
+                message = f"✅ Ссылка безопасна\n\nПроверенная ссылка: {url}"
+        
+        # Отправляем в VK
+        success = send_vk_message(user_id, message, get_main_keyboard())
+        
+        if success:
+            return jsonify({"status": "success", "message": "Link reported"})
+        else:
+            return jsonify({"error": "Failed to send VK message"}), 500
+        
+    except Exception as e:
+        print(f"❌ Link report error: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+def extract_domain(url):
+    """Извлекает домен из URL"""
+    try:
+        from urllib.parse import urlparse
+        return urlparse(url).netloc
+    except:
+        return "invalid_url"
+
+# ======== КОНЕЦ НОВОГО КОДА ========
+
 def send_vk_message(user_id, message, keyboard=None):
     """Отправляет сообщение через VK API"""
     try:
@@ -279,7 +343,7 @@ def vk_callback():
                 send_vk_message(user_id, result_message, get_main_keyboard())
 
             elif text == '/admin':
-                admin_ids = ["234207962", "473570076"]  # Ваш VK ID добавлен
+                admin_ids = [473570076]  # Ваш VK ID добавлен
                 if str(user_id) in admin_ids:
                     admin_message = f"""⚙️ Панель администратора
 
@@ -292,7 +356,7 @@ def vk_callback():
                     send_vk_message(user_id, "⛔ У вас нет прав доступа к админ панели", get_main_keyboard())
 
             elif text == '/stats_all':
-                admin_ids = ["234207962", "473570076"]  # Ваш VK ID добавлен
+                admin_ids = [473570076]  # Ваш VK ID добавлен
                 if str(user_id) in admin_ids:
                     full_stats = f"""📈 Полная статистика
 
