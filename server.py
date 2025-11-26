@@ -6,8 +6,8 @@ from datetime import datetime
 app = Flask(__name__)
 
 # Конфигурация
-VK_TOKEN = os.environ.get('VK_TOKEN', 'your_vk_token_here')
-SECRET_KEY = os.environ.get('SECRET_KEY', 'your_secret_key_here')
+VK_TOKEN = os.environ.get('VK_TOKEN', 'vk1.a.MI3dYhsBx8lgRdWjzrvVSHWxhTYt9-BDA9TXKbW3wCyb8m8yUO3O8SR_m6QVWtkBt49cu2iQ_BY3gR0DjTFGokcZgjyCQROJJG4VZmGdoKwOu3ZiyjI58L7eApBx2tOq_rU6IYs33OWbR__lglk3fcp2_eOGP6Z9Oamb-vC-JltZ0fLukc96G8s_C-8g6hS4jOFw0CTWYhoWKKe7af1-vw')
+SECRET_KEY = os.environ.get('SECRET_KEY', 'phishguard_secret_key_2024')
 
 @app.route('/')
 def home():
