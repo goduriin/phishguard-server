@@ -263,7 +263,7 @@ def vk_callback():
 🔍 КАК ЭТО РАБОТАЕТ:
 1. Установите расширение в Google Chrome
 2. При посещении VK расширение проверяет все ссылки  
-3. При обнаружении фишинга - вы получите уведомление
+3. При обнаружении фишинга - вы получаете уведомление
 4. Все безопасные ссылки сохраняются в статистике
 
 📊 КОМАНДЫ:
@@ -278,13 +278,9 @@ def vk_callback():
                 # Форматируем время для красивого отображения
                 if stats['last_check']:
                     try:
-<<<<<<< HEAD
-                        last_check_dt = datetime.fromisoformat(stats['last_check'].replace('Z', '+00:00'))
-=======
                         # Преобразуем ISO строку в datetime объект
                         last_check_dt = datetime.fromisoformat(stats['last_check'].replace('Z', '+00:00'))
                         # Форматируем в читаемый вид
->>>>>>> c66f8545fc0cc435006c7fe431dbcb8198960080
                         formatted_time = last_check_dt.strftime('%d.%m.%Y %H:%M:%S')
                     except:
                         formatted_time = stats['last_check']
@@ -313,11 +309,7 @@ def vk_callback():
 
 📋 Список опасных ссылок:
 """
-<<<<<<< HEAD
-                    for i, link in enumerate(user_malicious_links[-10:], 1):
-=======
                     for i, link in enumerate(user_malicious_links[-10:], 1):  # последние 10
->>>>>>> c66f8545fc0cc435006c7fe431dbcb8198960080
                         try:
                             time_str = datetime.fromisoformat(link['timestamp'].replace('Z', '+00:00')).strftime('%d.%m.%Y %H:%M')
                         except:
