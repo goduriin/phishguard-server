@@ -85,10 +85,12 @@ def vk_callback():
     """Обработчик Callback API для VK"""
     try:
         data = request.json
-        print(f"🔄 VK Callback: {data['type']}")
+        print(f"🔄 VK Callback: {data}")
         
         if data['type'] == 'confirmation':
-            return os.environ.get('CONFIRMATION_CODE', '')
+            confirmation_code = os.environ.get('CONFIRMATION_CODE', '')
+            print(f"🔐 Returning confirmation code: {confirmation_code}")
+            return confirmation_code
         
         if data['type'] == 'message_new':
             message = data['object']['message']
@@ -96,13 +98,7 @@ def vk_callback():
             text = message['text'].lower()
             
             if text in ['/start', '/help']:
-                help_message = """👋 Я бот PhishGuard!
-
-Я проверяю ссылки в вашей ленте VK и предупреждаю о фишинговых угрозах.
-
-Команды:
-/help - эта справка
-/stats - статистика"""
+                help_message = """👋 Я бот PhishGuard!"""
                 send_vk_message(user_id, help_message)
                 
         return 'ok'
@@ -110,21 +106,19 @@ def vk_callback():
     except Exception as e:
         print(f"❌ Callback error: {e}")
         return 'ok'
+
+# Debug endpoint для проверки переменных окружения
 @app.route('/debug-env')
 def debug_env():
     """Проверка переменных окружения"""
     import os
     return jsonify({
         "CONFIRMATION_CODE": os.environ.get('CONFIRMATION_CODE', 'NOT_SET'),
-        "all_variables": dict(os.environ)
+        "VK_TOKEN_set": bool(os.environ.get('VK_TOKEN')),
+        "SECRET_KEY_set": bool(os.environ.get('SECRET_KEY'))
     })
-# Важно: этот блок должен быть в конце файла
+
 if __name__ == '__main__':
-    print("🚀 Запуск PhishGuard Server...")
-    print("📍 Адрес: http://localhost:5000")
-    print("📍 Health: http://localhost:5000/health")
-    print("📍 API: http://localhost:5000/api/check-result (POST)")
-    print("📍 VK Callback: http://localhost:5000/vk-callback (POST)")
-    
+    print("🚀 Starting PhishGuard Server...")
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
