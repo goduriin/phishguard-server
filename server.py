@@ -87,13 +87,18 @@ def vk_callback():
         data = request.json
         print(f"🔄 VK Callback: {data}")
         
+        if data['type'] == 'confirmation':
+            confirmation_code = os.environ.get('CONFIRMATION_CODE', '')
+            print(f"🔐 Returning confirmation code: {confirmation_code}")
+            return confirmation_code
+        
         if data['type'] == 'message_new':
             message = data['object']['message']
             user_id = message['from_id']
             text = message['text'].lower()
-    
-        if text == '/start':
-            welcome_message = """👋 Привет! Я бот PhishGuard!
+            
+            if text == '/start':
+                welcome_message = """👋 Привет! Я бот PhishGuard!
 
 Я буду проверять ссылки в вашей ленте VK и предупреждать о фишинговых угрозах.
 
@@ -102,10 +107,10 @@ def vk_callback():
 /stats - статистика проверок
 
 ⚡ Для автоматической работы установите наше расширение в браузере!"""
-        send_vk_message(user_id, welcome_message)
-        
-    elif text == '/help':
-        help_message = """🛡️ PhishGuard - защита от фишинга
+                send_vk_message(user_id, welcome_message)
+                
+            elif text == '/help':
+                help_message = """🛡️ PhishGuard - защита от фишинга
 
 Я автоматически проверяю все ссылки в вашей ленте VK через VirusTotal API.
 
@@ -119,7 +124,7 @@ def vk_callback():
 /help - эта справка
 
 🚫 Будьте осторожны с подозрительными ссылками!"""
-        send_vk_message(user_id, help_message)
+                send_vk_message(user_id, help_message)
                 
         return 'ok'
         
@@ -141,4 +146,4 @@ def debug_env():
 if __name__ == '__main__':
     print("🚀 Starting PhishGuard Server...")
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    app.run(host='0.0.0.0', port=port)
