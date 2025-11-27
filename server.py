@@ -7,12 +7,11 @@ from flask_cors import CORS
 
 app = Flask(__name__)
 
-# НАСТРОЙКА CORS - ТОЛЬКО ОДИН РАЗ В НАЧАЛЕ
+# НАСТРОЙКА CORS - ТОЛЬКО ОДИН РАЗ
 CORS(app, 
      origins="*", 
      methods=["GET", "POST", "OPTIONS"], 
-     allow_headers=["Content-Type", "X-Secret-Key", "Authorization"],
-     supports_credentials=True)
+     allow_headers=["Content-Type", "X-Secret-Key", "Authorization"])
 
 # Конфигурация из переменных окружения
 VK_TOKEN = os.environ.get('VK_TOKEN')
@@ -28,8 +27,6 @@ stats = {
     'malicious_links': [],
     'link_history': []
 }
-
-# УДАЛИТЕ весь блок @app.after_request - он конфликтует с CORS(app)
 
 @app.route('/')
 def home():
@@ -88,8 +85,25 @@ def handle_check_result():
             if len(stats['malicious_links']) > 50:
                 stats['malicious_links'] = stats['malicious_links'][-50:]
             
-            # Отправляем уведомление об опасной ссылке
-            message = f"""🚨 ФИШИНГ ОБНАРУЖЕН!
+            # Формируем сообщение с информацией о распаковке
+            original_url = data.get('original_url', url)
+            final_url = data.get('final_url', url)
+            is_vk_redirect = data.get('is_vk_redirect', False)
+            
+            if is_vk_redirect:
+                message = f"""🚨 ФИШИНГ ОБНАРУЖЕН!
+
+⚠️ ВНИМАНИЕ: Ссылка была замаскирована под VK!
+
+📌 Маскированная ссылка: {original_url}
+🔗 Настоящая ссылка: {final_url}
+🌐 Домен: {extract_domain(final_url)}
+🕒 Время обнаружения: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}
+
+🚫 НЕ ПЕРЕХОДИТЕ по этой ссылке!
+🎭 Это фишинг, замаскированный под ссылку VK!"""
+            else:
+                message = f"""🚨 ФИШИНГ ОБНАРУЖЕН!
 
 📌 Опасная ссылка: {url}
 🌐 Домен: {extract_domain(url)}
@@ -137,13 +151,15 @@ def handle_link_report():
         
         # Сохраняем в историю ВСЕХ ссылок
         link_data = {
-            'url': data.get('url'),
-            'domain': extract_domain(data.get('url')),
+            'url': data.get('original_url'),
+            'final_url': data.get('final_url'),
+            'domain': extract_domain(data.get('final_url', data.get('original_url'))),
             'timestamp': datetime.now().isoformat(),
             'source': data.get('source', 'unknown'),
             'user_id': data.get('user_id'),
             'is_malicious': data.get('is_malicious', False),
-            'page_url': data.get('page_url'),
+            'is_vk_redirect': data.get('is_vk_redirect', False),
+            'is_external': data.get('is_external', False),
             'report_type': data.get('report_type', 'all_links')
         }
         
@@ -155,7 +171,9 @@ def handle_link_report():
         
         # Логируем тип ссылки
         domain = link_data['domain']
-        if 'vk.com' in domain or 'vk.' in domain:
+        if link_data.get('is_vk_redirect'):
+            link_type = "VK маскированная"
+        elif 'vk.com' in domain or 'vk.' in domain:
             link_type = "VK внутренняя"
         else:
             link_type = "Внешняя"
@@ -206,8 +224,8 @@ def get_main_keyboard():
             [{
                 "action": {
                     "type": "text", 
-                    "payload": "{\"command\":\"all_links\"}",  # ← ИЗМЕНИТЕ ЭТУ СТРОКУ
-                    "label": "🔗 Все ссылки"  # ← И НАЗВАНИЕ
+                    "payload": "{\"command\":\"all_links\"}",
+                    "label": "🔗 Все ссылки"
                 },
                 "color": "primary"
             }],
@@ -230,7 +248,272 @@ def get_main_keyboard():
         ]
     }
 
-# Остальные функции остаются без изменений...
+def send_vk_message(user_id, message, keyboard=None):
+    """Отправляет сообщение через VK API"""
+    try:
+        print(f"📤 Sending message to user {user_id}")
+        
+        params = {
+            'user_id': int(user_id),
+            'message': message,
+            'random_id': int(datetime.now().timestamp() * 1000),
+            'access_token': VK_TOKEN,
+            'v': '5.199'
+        }
+        
+        if keyboard:
+            keyboard_json = json.dumps(keyboard, ensure_ascii=False)
+            params['keyboard'] = keyboard_json
+        
+        response = requests.post(
+            'https://api.vk.com/method/messages.send',
+            data=params,
+            timeout=10
+        )
+        
+        result = response.json()
+        
+        if 'error' in result:
+            error = result['error']
+            print(f"❌ VK API Error {error.get('error_code')}: {error.get('error_msg')}")
+            return False
+            
+        return True
+            
+    except Exception as e:
+        print(f"❌ Send message error: {e}")
+        return False
+
+@app.route('/vk-callback', methods=['POST'])
+def vk_callback():
+    """Обработчик Callback API для VK"""
+    try:
+        data = request.json
+        print(f"🔄 VK Callback received")
+        
+        if data['type'] == 'confirmation':
+            confirmation_code = os.environ.get('CONFIRMATION_CODE', '')
+            print(f"🔐 Returning confirmation code")
+            return confirmation_code
+        
+        if data['type'] == 'message_new':
+            message = data['object']['message']
+            user_id = message['from_id']
+            text = message['text'].lower()
+            payload = message.get('payload', '{}')
+            
+            # Обработка нажатий кнопок
+            if payload:
+                try:
+                    payload_data = json.loads(payload)
+                    command = payload_data.get('command', '')
+                    print(f"🔍 VK Bot: Command from payload: '{command}'")
+                    
+                    if command == 'help':
+                        text = '/help'
+                    elif command == 'stats':
+                        text = '/stats'
+                    elif command == 'all_links':
+                        text = '/all_links'
+                    elif command == 'malicious_links':
+                        text = '/malicious_links'
+                    elif command == 'check':
+                        text = '/check'
+                except Exception as e:
+                    print(f"❌ Payload parse error: {e}")
+            
+            print(f"🔍 VK Bot: Обрабатываем команду: '{text}'")
+            
+            if text == '/start':
+                welcome_message = """👋 Привет! Я бот PhishGuard!
+
+🛡️ **Автоматическая защита:**
+• Расширение проверяет все ссылки в ленте VK
+• Распаковывает замаскированные фишинговые ссылки
+• Опасные ссылки сразу блокируются
+• Вы получаете уведомления только об угрозах
+
+📊 **Статистика и отчеты:**
+• /stats - общая статистика проверок
+• /all_links - полная статистика по всем ссылкам
+• /malicious_links - список опасных ссылок
+
+🔍 **Ручная проверка:**
+Отправьте мне любую ссылку или используйте /check
+
+⚡ **Для автоматической работы установите наше расширение!**"""
+                send_vk_message(user_id, welcome_message, get_main_keyboard())
+                
+            elif text == '/help':
+                help_message = """🛡️ PhishGuard - защита от фишинга
+
+Я автоматически проверяю ссылки в вашей ленте VK, включая замаскированные!
+
+🔍 КАК ЭТО РАБОТАЕТ:
+1. Установите расширение в Google Chrome
+2. При посещении VK расширение проверяет ВСЕ ссылки  
+3. Распаковывает ссылки, замаскированные под VK
+4. При обнаружении фишинга - вы получаете уведомление
+5. Все ссылки сохраняются в статистике
+
+📊 КОМАНДЫ:
+• /stats - статистика проверок
+• /all_links - все отслеживаемые ссылки
+• /malicious_links - опасные ссылки
+• /check URL - проверить ссылку
+
+⚠️ ВАЖНО: Расширение работает только в Google Chrome!"""
+                send_vk_message(user_id, help_message, get_main_keyboard())
+                
+            elif text == '/stats':
+                # Форматируем время для красивого отображения
+                if stats['last_check']:
+                    try:
+                        last_check_dt = datetime.fromisoformat(stats['last_check'].replace('Z', '+00:00'))
+                        formatted_time = last_check_dt.strftime('%d.%m.%Y %H:%M:%S')
+                    except:
+                        formatted_time = stats['last_check']
+                else:
+                    formatted_time = 'еще не было'
+                
+                stats_message = f"""📊 Статистика PhishGuard
+
+Всего проверок: {stats['total_checks']}
+Обнаружено угроз: {stats['malicious_count']}
+Уникальных пользователей: {len(stats['users'])}
+Последняя проверка: {formatted_time}
+
+💡 Система работает в фоновом режиме
+🚫 Уведомления приходят только об опасных ссылках"""
+                send_vk_message(user_id, stats_message, get_main_keyboard())
+
+            elif text == '/all_links':
+                user_links = [link for link in stats.get('link_history', []) 
+                              if link.get('user_id') == str(user_id)]
+                
+                if not user_links:
+                    message = "📊 Пока нет сохраненных ссылок\n\nСистема начнет сбор статистики при просмотре ленты VK"
+                else:
+                    # Группируем по типам
+                    vk_links = [link for link in user_links if 'vk.' in link.get('domain', '') and not link.get('is_vk_redirect')]
+                    masked_links = [link for link in user_links if link.get('is_vk_redirect')]
+                    external_links = [link for link in user_links if 'vk.' not in link.get('domain', '') and not link.get('is_vk_redirect')]
+                    malicious_links = [link for link in user_links if link.get('is_malicious')]
+                    
+                    message = f"""📊 ПОЛНАЯ СТАТИСТИКА ССЫЛОК
+
+Всего ссылок: {len(user_links)}
+• VK ссылки: {len(vk_links)}
+• Замаскированные ссылки: {len(masked_links)}
+• Внешние ссылки: {len(external_links)}
+• Опасные ссылки: {len(malicious_links)}
+
+💡 Система отслеживает ВСЕ ссылки в вашей ленте
+🎭 Включая замаскированные под VK!"""
+                
+                send_vk_message(user_id, message, get_main_keyboard())
+
+            elif text == '/malicious_links':
+                user_malicious_links = [link for link in stats.get('malicious_links', []) 
+                                      if link.get('user_id') == str(user_id)]
+                
+                if not user_malicious_links:
+                    message = "✅ Отлично! Опасных ссылок не обнаружено\n\nСистема продолжает мониторинг вашей ленты VK"
+                else:
+                    message = f"""🚫 Обнаружено опасных ссылок: {len(user_malicious_links)}
+
+📋 Список опасных ссылок:
+"""
+                    for i, link in enumerate(user_malicious_links[-10:], 1):
+                        try:
+                            time_str = datetime.fromisoformat(link['timestamp'].replace('Z', '+00:00')).strftime('%d.%m.%Y %H:%M')
+                        except:
+                            time_str = link['timestamp']
+                        
+                        if link.get('is_vk_redirect'):
+                            message += f"{i}. 🎭 {link['domain']} (замаскированная) ({time_str})\n"
+                        else:
+                            message += f"{i}. {link['domain']} ({time_str})\n"
+                    
+                    message += f"\n⚠️ Всего обнаружено: {len(user_malicious_links)} опасных ссылок"
+                
+                send_vk_message(user_id, message, get_main_keyboard())
+
+            elif text.startswith('/check ') or (text.startswith('http') and not text.startswith('/')):
+                url = text.replace('/check ', '').strip()
+                if not url.startswith(('http://', 'https://')):
+                    url = 'https://' + url
+                
+                # Проверяем валидность URL
+                try:
+                    from urllib.parse import urlparse
+                    parsed = urlparse(url)
+                    if not parsed.netloc:
+                        raise ValueError("Invalid URL")
+                except:
+                    send_vk_message(user_id, "❌ Неверный формат ссылки. Пример: /check https://example.com", get_main_keyboard())
+                    return 'ok'
+                
+                check_message = f"🔍 Проверяю ссылку: {url}\n\nПодождите 5-10 секунд..."
+                send_vk_message(user_id, check_message)
+                
+                # Проверка
+                result = check_url_safety(url)
+                
+                if result.get('error'):
+                    result_message = f"❌ Ошибка проверки: {result['error']}\n\nПопробуйте позже."
+                else:
+                    if result['is_safe']:
+                        details = result['details']
+                        engine_results = details.get('engine_results', {})
+                        clean_count = engine_results.get('clean', 0) or engine_results.get('harmless', 0) or 65
+                        malicious_count = engine_results.get('malicious', 0) or engine_results.get('malicious', 0) or 2
+    
+                        result_message = f"""✅ Ссылка БЕЗОПАСНА!
+
+📌 URL: {url}
+🌐 Домен: {extract_domain(url)}
+🔧 Проверено: {details.get('engine', 'Unknown')}
+
+📊 Результаты проверки:
+• Безопасно: {clean_count} антивирусов
+• Подозрительно: {malicious_count} антивирусов
+
+💡 Можно переходить, но всегда будьте осторожны!"""
+                    else:
+                        details = result['details']
+                        engine_results = details.get('engine_results', {})
+                        clean_count = engine_results.get('clean', 0) or engine_results.get('harmless', 0) or 15
+                        malicious_count = engine_results.get('malicious', 0) or engine_results.get('malicious', 0) or 48
+    
+                        result_message = f"""🚨 ВНИМАНИЕ! Ссылка ОПАСНА!
+
+📌 URL: {url}  
+🌐 Домен: {extract_domain(url)}
+🔧 Проверено: {details.get('engine', 'Unknown')}
+
+📊 Результаты проверки:
+• Безопасно: {clean_count} антивирусов
+• ОПАСНО: {malicious_count} антивирусов
+
+🚫 НЕ ПЕРЕХОДИТЕ по этой ссылке!
+⚠️ Это может быть фишинг или мошенничество!"""
+                
+                send_vk_message(user_id, result_message, get_main_keyboard())
+
+            else:
+                if not text.startswith('/'):
+                    help_offer = """Не понял ваше сообщение 🤔
+
+Используйте кнопки ниже или команды:"""
+                    send_vk_message(user_id, help_offer, get_main_keyboard())
+                
+        return 'ok'
+        
+    except Exception as e:
+        print(f"❌ Callback error: {e}")
+        return 'ok'
+
 def check_url_safety(url):
     """Настоящая проверка через VirusTotal API"""
     try:
@@ -298,250 +581,6 @@ def heuristic_url_check(url):
             }
         }
     }
-
-@app.route('/vk-callback', methods=['POST'])
-def vk_callback():
-    """Обработчик Callback API для VK"""
-    try:
-        data = request.json
-        print(f"🔄 VK Callback received")
-        
-        if data['type'] == 'confirmation':
-            confirmation_code = os.environ.get('CONFIRMATION_CODE', '')
-            print(f"🔐 Returning confirmation code")
-            return confirmation_code
-        
-        if data['type'] == 'message_new':
-            message = data['object']['message']
-            user_id = message['from_id']
-            text = message['text'].lower()
-            payload = message.get('payload', '{}')
-            
-            if payload:
-                try:
-                    payload_data = json.loads(payload)
-                    command = payload_data.get('command', '')
-                    
-                    if command == 'help':
-                        text = '/help'
-                    elif command == 'stats':
-                        text = '/stats'
-                    elif command == 'malicious_links':
-                        text = '/malicious_links'
-                    elif command == 'check':
-                        text = '/check'
-                except Exception as e:
-                    print(f"❌ Payload parse error: {e}")
-            
-            if text == '/start':
-                welcome_message = """👋 Привет! Я бот PhishGuard!
-
-🛡️ **Автоматическая защита:**
-• Расширение проверяет все ссылки в ленте VK
-• Опасные ссылки сразу блокируются
-• Вы получаете уведомления только об угрозах
-
-📊 **Статистика и отчеты:**
-• /stats - общая статистика проверок
-• /malicious_links - список опасных ссылок
-
-🔍 **Ручная проверка:**
-Отправьте мне любую ссылку или используйте /check
-
-⚡ **Для автоматической работы установите наше расширение!**"""
-                send_vk_message(user_id, welcome_message, get_main_keyboard())
-                
-            elif text == '/help':
-                help_message = """🛡️ PhishGuard - защита от фишинга
-
-Я автоматически проверяю ссылки в вашей ленте VK.
-
-🔍 КАК ЭТО РАБОТАЕТ:
-1. Установите расширение в Google Chrome
-2. При посещении VK расширение проверяет все ссылки  
-3. При обнаружении фишинга - вы получаете уведомление
-4. Все безопасные ссылки сохраняются в статистике
-
-📊 КОМАНДЫ:
-• /stats - статистика проверок
-• /malicious_links - опасные ссылки
-• /check URL - проверить ссылку
-
-⚠️ ВАЖНО: Расширение работает только в Google Chrome!"""
-                send_vk_message(user_id, help_message, get_main_keyboard())
-                
-            elif text == '/stats':
-                if stats['last_check']:
-                    try:
-                        last_check_dt = datetime.fromisoformat(stats['last_check'].replace('Z', '+00:00'))
-                        formatted_time = last_check_dt.strftime('%d.%m.%Y %H:%M:%S')
-                    except:
-                        formatted_time = stats['last_check']
-                else:
-                    formatted_time = 'еще не было'
-                
-                stats_message = f"""📊 Статистика PhishGuard
-
-Всего проверок: {stats['total_checks']}
-Обнаружено угроз: {stats['malicious_count']}
-Уникальных пользователей: {len(stats['users'])}
-Последняя проверка: {formatted_time}
-
-💡 Система работает в фоновом режиме
-🚫 Уведомления приходят только об опасных ссылках"""
-                send_vk_message(user_id, stats_message, get_main_keyboard())
-
-            elif text == '/malicious_links':
-                user_malicious_links = [link for link in stats.get('malicious_links', []) 
-                                      if link.get('user_id') == str(user_id)]
-                
-                if not user_malicious_links:
-                    message = "✅ Отлично! Опасных ссылок не обнаружено\n\nСистема продолжает мониторинг вашей ленты VK"
-                else:
-                    message = f"""🚫 Обнаружено опасных ссылок: {len(user_malicious_links)}
-
-📋 Список опасных ссылок:
-"""
-                    for i, link in enumerate(user_malicious_links[-10:], 1):
-                        try:
-                            time_str = datetime.fromisoformat(link['timestamp'].replace('Z', '+00:00')).strftime('%d.%m.%Y %H:%M')
-                        except:
-                            time_str = link['timestamp']
-                        message += f"{i}. {link['domain']} ({time_str})\n"
-                    
-                    message += f"\n⚠️ Всего обнаружено: {len(user_malicious_links)} опасных ссылок"
-                
-                send_vk_message(user_id, message, get_main_keyboard())
-            elif text == '/all_links':
-                user_links = [link for link in stats.get('link_history', []) 
-                              if link.get('user_id') == str(user_id)]
-                
-                if not user_links:
-                    message = "📊 Пока нет сохраненных ссылок\n\nСистема начнет сбор статистики при просмотре ленты VK"
-                else:
-                    # Группируем по типам
-                    vk_links = [link for link in user_links if 'vk.' in link.get('domain', '')]
-                    external_links = [link for link in user_links if 'vk.' not in link.get('domain', '')]
-                    malicious_links = [link for link in user_links if link.get('is_malicious')]
-                    
-                    message = f"""📊 ПОЛНАЯ СТАТИСТИКА ССЫЛОК
-
-Всего ссылок: {len(user_links)}
-• VK ссылки: {len(vk_links)}
-• Внешние ссылки: {len(external_links)}
-• Опасные ссылки: {len(malicious_links)}
-
-💡 Система отслеживает ВСЕ ссылки в вашей ленте"""
-                
-                send_vk_message(user_id, message, get_main_keyboard())
-            elif text.startswith('/check ') or (text.startswith('http') and not text.startswith('/')):
-                url = text.replace('/check ', '').strip()
-                if not url.startswith(('http://', 'https://')):
-                    url = 'https://' + url
-                
-                try:
-                    from urllib.parse import urlparse
-                    parsed = urlparse(url)
-                    if not parsed.netloc:
-                        raise ValueError("Invalid URL")
-                except:
-                    send_vk_message(user_id, "❌ Неверный формат ссылки. Пример: /check https://example.com", get_main_keyboard())
-                    return 'ok'
-                
-                check_message = f"🔍 Проверяю ссылку: {url}\n\nПодождите 5-10 секунд..."
-                send_vk_message(user_id, check_message)
-                
-                result = check_url_safety(url)
-                
-                if result.get('error'):
-                    result_message = f"❌ Ошибка проверки: {result['error']}\n\nПопробуйте позже."
-                else:
-                    if result['is_safe']:
-                        details = result['details']
-                        engine_results = details.get('engine_results', {})
-                        clean_count = engine_results.get('clean', 0) or engine_results.get('harmless', 0) or 65
-                        malicious_count = engine_results.get('malicious', 0) or engine_results.get('malicious', 0) or 2
-    
-                        result_message = f"""✅ Ссылка БЕЗОПАСНА!
-
-📌 URL: {url}
-🌐 Домен: {extract_domain(url)}
-🔧 Проверено: {details.get('engine', 'Unknown')}
-
-📊 Результаты проверки:
-• Безопасно: {clean_count} антивирусов
-• Подозрительно: {malicious_count} антивирусов
-
-💡 Можно переходить, но всегда будьте осторожны!"""
-                    else:
-                        details = result['details']
-                        engine_results = details.get('engine_results', {})
-                        clean_count = engine_results.get('clean', 0) or engine_results.get('harmless', 0) or 15
-                        malicious_count = engine_results.get('malicious', 0) or engine_results.get('malicious', 0) or 48
-    
-                        result_message = f"""🚨 ВНИМАНИЕ! Ссылка ОПАСНА!
-
-📌 URL: {url}  
-🌐 Домен: {extract_domain(url)}
-🔧 Проверено: {details.get('engine', 'Unknown')}
-
-📊 Результаты проверки:
-• Безопасно: {clean_count} антивирусов
-• ОПАСНО: {malicious_count} антивирусов
-
-🚫 НЕ ПЕРЕХОДИТЕ по этой ссылке!
-⚠️ Это может быть фишинг или мошенничество!"""
-                
-                send_vk_message(user_id, result_message, get_main_keyboard())
-
-            else:
-                if not text.startswith('/'):
-                    help_offer = """Не понял ваше сообщение 🤔
-
-Используйте кнопки ниже или команды:"""
-                    send_vk_message(user_id, help_offer, get_main_keyboard())
-                
-        return 'ok'
-        
-    except Exception as e:
-        print(f"❌ Callback error: {e}")
-        return 'ok'
-
-def send_vk_message(user_id, message, keyboard=None):
-    """Отправляет сообщение через VK API"""
-    try:
-        print(f"📤 Sending message to user {user_id}")
-        
-        params = {
-            'user_id': int(user_id),
-            'message': message,
-            'random_id': int(datetime.now().timestamp() * 1000),
-            'access_token': VK_TOKEN,
-            'v': '5.199'
-        }
-        
-        if keyboard:
-            keyboard_json = json.dumps(keyboard, ensure_ascii=False)
-            params['keyboard'] = keyboard_json
-        
-        response = requests.post(
-            'https://api.vk.com/method/messages.send',
-            data=params,
-            timeout=10
-        )
-        
-        result = response.json()
-        
-        if 'error' in result:
-            error = result['error']
-            print(f"❌ VK API Error {error.get('error_code')}: {error.get('error_msg')}")
-            return False
-            
-        return True
-            
-    except Exception as e:
-        print(f"❌ Send message error: {e}")
-        return False
 
 if __name__ == '__main__':
     print("🚀 Starting PhishGuard Server...")
