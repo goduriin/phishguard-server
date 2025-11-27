@@ -4,8 +4,10 @@ import os
 import json 
 from datetime import datetime
 from collections import Counter
+from flask_cors import CORS  # ← ДОБАВЛЕН ИМПОРТ
 
 app = Flask(__name__)
+CORS(app)  # ← ДОБАВЛЕНА ЭТА СТРОКА
 
 # Конфигурация из переменных окружения
 VK_TOKEN = os.environ.get('VK_TOKEN')
@@ -18,9 +20,17 @@ stats = {
     'malicious_count': 0,
     'users': set(),
     'last_check': None,
-    'malicious_links': [],  # Только подозрительные ссылки
-    'link_history': []      # История всех ссылок
+    'malicious_links': [],
+    'link_history': []
 }
+
+# Добавить обработку CORS предварительных запросов
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Secret-Key')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
 
 # Клавиатуры для бота
 def get_main_keyboard():
@@ -75,10 +85,13 @@ def home():
 def health():
     return jsonify({"status": "healthy", "timestamp": datetime.now().isoformat()})
 
-@app.route('/api/check-result', methods=['POST'])
+@app.route('/api/check-result', methods=['POST', 'OPTIONS'])  # ← ДОБАВЛЕН OPTIONS
 def handle_check_result():
     """Принимает результаты проверки от расширения"""
-     # Проверка секретного ключа
+    if request.method == 'OPTIONS':
+        return jsonify({"status": "ok"}), 200
+        
+    # Проверка секретного ключа
     client_secret = request.headers.get('X-Secret-Key')
     if client_secret != SECRET_KEY:
         print(f"⚠️ Unauthorized access attempt")
@@ -139,9 +152,12 @@ def handle_check_result():
         print(f"❌ Error in check-result: {e}")
         return jsonify({"error": "Internal server error"}), 500
 
-@app.route('/api/report-link', methods=['POST'])
+@app.route('/api/report-link', methods=['POST', 'OPTIONS'])  # ← ДОБАВЛЕН OPTIONS
 def handle_link_report():
     """Принимает ВСЕ ссылки для статистики (без отправки сообщений)"""
+    if request.method == 'OPTIONS':
+        return jsonify({"status": "ok"}), 200
+        
     # Проверка секретного ключа
     client_secret = request.headers.get('X-Secret-Key')
     if client_secret != SECRET_KEY:
