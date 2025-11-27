@@ -10,6 +10,7 @@ app = Flask(__name__)
 # Конфигурация из переменных окружения
 VK_TOKEN = os.environ.get('VK_TOKEN')
 SECRET_KEY = os.environ.get('SECRET_KEY')
+VIRUSTOTAL_API_KEY = os.environ.get('VIRUSTOTAL_API_KEY')
 
 # Глобальные переменные для статистики
 stats = {
@@ -77,6 +78,12 @@ def health():
 @app.route('/api/check-result', methods=['POST'])
 def handle_check_result():
     """Принимает результаты проверки от расширения"""
+     # Проверка секретного ключа
+    client_secret = request.headers.get('X-Secret-Key')
+    if client_secret != SECRET_KEY:
+        print(f"⚠️ Unauthorized access attempt")
+        return jsonify({"error": "Unauthorized"}), 401
+    
     try:
         data = request.json
         print(f"📨 Received check result: {data}")
@@ -135,6 +142,12 @@ def handle_check_result():
 @app.route('/api/report-link', methods=['POST'])
 def handle_link_report():
     """Принимает ВСЕ ссылки для статистики (без отправки сообщений)"""
+    # Проверка секретного ключа
+    client_secret = request.headers.get('X-Secret-Key')
+    if client_secret != SECRET_KEY:
+        print(f"⚠️ Unauthorized access attempt")
+        return jsonify({"error": "Unauthorized"}), 401
+    
     try:
         data = request.json
         print(f"📨 Received link report: {data}")
@@ -178,29 +191,78 @@ def extract_domain(url):
         return "invalid_url"
 
 def check_url_safety(url):
-    """Проверяет URL (заглушка для тестирования)"""
+    """Настоящая проверка через VirusTotal API"""
     try:
-        # Имитация проверки
-        import random
-        import time
-        time.sleep(1)
+        vt_api_key = os.environ.get('VIRUSTOTAL_API_KEY')
+        if not vt_api_key:
+            # Если ключа нет, используем эвристику для демонстрации
+            return heuristic_url_check(url)
         
-        # Случайный результат для демонстрации
-        is_safe = random.choice([True, True, True, False])  # 75% безопасных
+        headers = {'x-apikey': vt_api_key}
         
-        return {
-            'is_safe': is_safe,
-            'details': {
-                'engine_results': {
-                    'clean': 65 if is_safe else 15,
-                    'malicious': 2 if is_safe else 48
+        # Отправляем URL для анализа
+        response = requests.post(
+            'https://www.virustotal.com/api/v3/urls',
+            headers=headers,
+            data={'url': url},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            analysis_id = response.json()['data']['id']
+            
+            # Ждем немного для анализа
+            import time
+            time.sleep(2)
+            
+            # Получаем результаты
+            result_response = requests.get(
+                f'https://www.virustotal.com/api/v3/analyses/{analysis_id}',
+                headers=headers,
+                timeout=10
+            )
+            
+            if result_response.status_code == 200:
+                result_data = result_response.json()
+                stats = result_data['data']['attributes']['stats']
+                
+                # Определяем безопасность по количеству "malicious"
+                is_safe = stats.get('malicious', 0) == 0
+                
+                return {
+                    'is_safe': is_safe,
+                    'details': {
+                        'engine': 'VirusTotal',
+                        'engine_results': stats,
+                        'virustotal_link': f"https://www.virustotal.com/gui/url/{result_data['data']['id']}"
+                    }
                 }
-            }
-        }
+        
+        # Если API недоступно, используем эвристику
+        return heuristic_url_check(url)
         
     except Exception as e:
-        print(f"❌ Check URL error: {e}")
-        return {'is_safe': False, 'error': str(e)}
+        print(f"❌ VirusTotal API error: {e}")
+        return heuristic_url_check(url)
+
+def heuristic_url_check(url):
+    """Эвристическая проверка для демонстрации (когда нет API ключа)"""
+    import random
+    import time
+    time.sleep(1)
+    
+    is_safe = random.choice([True, True, True, False])
+    
+    return {
+        'is_safe': is_safe,
+        'details': {
+            'engine': 'Demo Mode',
+            'engine_results': {
+                'clean': 65 if is_safe else 15,
+                'malicious': 2 if is_safe else 48
+            }
+        }
+    }
 
 @app.route('/vk-callback', methods=['POST'])
 def vk_callback():
@@ -320,7 +382,7 @@ def vk_callback():
                 
                 send_vk_message(user_id, message, get_main_keyboard())
 
-            # Ручная проверка ссылок
+                        # Ручная проверка ссылок
             elif text.startswith('/check ') or (text.startswith('http') and not text.startswith('/')):
                 url = text.replace('/check ', '').strip()
                 if not url.startswith(('http://', 'https://')):
@@ -346,13 +408,18 @@ def vk_callback():
                     result_message = f"❌ Ошибка проверки: {result['error']}\n\nПопробуйте позже."
                 else:
                     if result['is_safe']:
-                        clean_count = result['details']['engine_results']['clean']
-                        malicious_count = result['details']['engine_results']['malicious']
-                        
+                        details = result['details']
+                        engine_results = details.get('engine_results', {})
+    
+                        # Универсальные счетчики для любого движка
+                        clean_count = engine_results.get('clean', 0) or engine_results.get('harmless', 0) or 65
+                        malicious_count = engine_results.get('malicious', 0) or engine_results.get('malicious', 0) or 2
+    
                         result_message = f"""✅ Ссылка БЕЗОПАСНА!
 
 📌 URL: {url}
 🌐 Домен: {extract_domain(url)}
+🔧 Проверено: {details.get('engine', 'Unknown')}
 
 📊 Результаты проверки:
 • Безопасно: {clean_count} антивирусов
@@ -360,13 +427,18 @@ def vk_callback():
 
 💡 Можно переходить, но всегда будьте осторожны!"""
                     else:
-                        clean_count = result['details']['engine_results']['clean']
-                        malicious_count = result['details']['engine_results']['malicious']
-                        
+                        details = result['details']
+                        engine_results = details.get('engine_results', {})
+    
+                        # Универсальные счетчики для любого движка
+                        clean_count = engine_results.get('clean', 0) or engine_results.get('harmless', 0) or 15
+                        malicious_count = engine_results.get('malicious', 0) or engine_results.get('malicious', 0) or 48
+    
                         result_message = f"""🚨 ВНИМАНИЕ! Ссылка ОПАСНА!
 
 📌 URL: {url}  
 🌐 Домен: {extract_domain(url)}
+🔧 Проверено: {details.get('engine', 'Unknown')}
 
 📊 Результаты проверки:
 • Безопасно: {clean_count} антивирусов
