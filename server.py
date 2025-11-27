@@ -3,15 +3,20 @@ import requests
 import os
 import json 
 from datetime import datetime
-from collections import Counter
-from flask_cors import CORS  # ← ДОБАВЛЕН ИМПОРТ
+from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)  # ← ДОБАВЛЕНА ЭТА СТРОКА
+
+# НАСТРОЙКА CORS - ТОЛЬКО ОДИН РАЗ В НАЧАЛЕ
+CORS(app, 
+     origins="*", 
+     methods=["GET", "POST", "OPTIONS"], 
+     allow_headers=["Content-Type", "X-Secret-Key", "Authorization"],
+     supports_credentials=True)
 
 # Конфигурация из переменных окружения
 VK_TOKEN = os.environ.get('VK_TOKEN')
-SECRET_KEY = os.environ.get('SECRET_KEY')
+SECRET_KEY = os.environ.get('SECRET_KEY', 'phishguard_secret_key_2024')
 VIRUSTOTAL_API_KEY = os.environ.get('VIRUSTOTAL_API_KEY')
 
 # Глобальные переменные для статистики
@@ -24,54 +29,7 @@ stats = {
     'link_history': []
 }
 
-# Добавить обработку CORS предварительных запросов
-@app.after_request
-def after_request(response):
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Secret-Key')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-    return response
-
-# Клавиатуры для бота
-def get_main_keyboard():
-    """Основная клавиатура с командами"""
-    return {
-        "one_time": False,
-        "buttons": [
-            [{
-                "action": {
-                    "type": "text",
-                    "payload": "{\"command\":\"help\"}",
-                    "label": "🛡️ Помощь"
-                },
-                "color": "primary"
-            }],
-            [{
-                "action": {
-                    "type": "text", 
-                    "payload": "{\"command\":\"stats\"}",
-                    "label": "📊 Статистика"
-                },
-                "color": "positive"
-            }],
-            [{
-                "action": {
-                    "type": "text", 
-                    "payload": "{\"command\":\"malicious_links\"}",
-                    "label": "🚫 Опасные ссылки"
-                },
-                "color": "negative"
-            }],
-            [{
-                "action": {
-                    "type": "text",
-                    "payload": "{\"command\":\"check\"}",
-                    "label": "🔍 Проверить ссылку"
-                },
-                "color": "primary"
-            }]
-        ]
-    }
+# УДАЛИТЕ весь блок @app.after_request - он конфликтует с CORS(app)
 
 @app.route('/')
 def home():
@@ -85,12 +43,14 @@ def home():
 def health():
     return jsonify({"status": "healthy", "timestamp": datetime.now().isoformat()})
 
-@app.route('/api/check-result', methods=['POST', 'OPTIONS'])  # ← ДОБАВЛЕН OPTIONS
+# ЯВНО ОБРАБАТЫВАЕМ OPTIONS ДЛЯ КАЖДОГО МАРШРУТА
+@app.route('/api/check-result', methods=['OPTIONS'])
+def options_check_result():
+    return jsonify({"status": "ok"}), 200
+
+@app.route('/api/check-result', methods=['POST'])
 def handle_check_result():
     """Принимает результаты проверки от расширения"""
-    if request.method == 'OPTIONS':
-        return jsonify({"status": "ok"}), 200
-        
     # Проверка секретного ключа
     client_secret = request.headers.get('X-Secret-Key')
     if client_secret != SECRET_KEY:
@@ -152,12 +112,13 @@ def handle_check_result():
         print(f"❌ Error in check-result: {e}")
         return jsonify({"error": "Internal server error"}), 500
 
-@app.route('/api/report-link', methods=['POST', 'OPTIONS'])  # ← ДОБАВЛЕН OPTIONS
+@app.route('/api/report-link', methods=['OPTIONS'])
+def options_report_link():
+    return jsonify({"status": "ok"}), 200
+
+@app.route('/api/report-link', methods=['POST'])
 def handle_link_report():
-    """Принимает ВСЕ ссылки для статистики (без отправки сообщений)"""
-    if request.method == 'OPTIONS':
-        return jsonify({"status": "ok"}), 200
-        
+    """Принимает ВСЕ ссылки для статистики"""
     # Проверка секретного ключа
     client_secret = request.headers.get('X-Secret-Key')
     if client_secret != SECRET_KEY:
@@ -174,24 +135,38 @@ def handle_link_report():
             stats['users'].add(data.get('user_id'))
         stats['last_check'] = datetime.now().isoformat()
         
-        # Сохраняем в историю ссылок
+        # Сохраняем в историю ВСЕХ ссылок
         link_data = {
             'url': data.get('url'),
             'domain': extract_domain(data.get('url')),
             'timestamp': datetime.now().isoformat(),
             'source': data.get('source', 'unknown'),
             'user_id': data.get('user_id'),
-            'is_malicious': data.get('is_malicious', False)
+            'is_malicious': data.get('is_malicious', False),
+            'page_url': data.get('page_url'),
+            'report_type': data.get('report_type', 'all_links')
         }
         
         stats['link_history'].append(link_data)
-        # Ограничиваем историю 200 записями
-        if len(stats['link_history']) > 200:
-            stats['link_history'] = stats['link_history'][-200:]
+        
+        # Ограничиваем историю 500 записями (увеличили для всех ссылок)
+        if len(stats['link_history']) > 500:
+            stats['link_history'] = stats['link_history'][-500:]
+        
+        # Логируем тип ссылки
+        domain = link_data['domain']
+        if 'vk.com' in domain or 'vk.' in domain:
+            link_type = "VK внутренняя"
+        else:
+            link_type = "Внешняя"
+            
+        print(f"📊 Сохранена {link_type} ссылка: {domain}")
         
         return jsonify({
             "status": "success", 
-            "message": "Link saved to statistics"
+            "message": "Link saved to statistics",
+            "link_type": link_type,
+            "total_links": len(stats['link_history'])
         })
         
     except Exception as e:
@@ -206,17 +181,65 @@ def extract_domain(url):
     except:
         return "invalid_url"
 
+# Клавиатуры для бота
+def get_main_keyboard():
+    """Основная клавиатура с командами"""
+    return {
+        "one_time": False,
+        "buttons": [
+            [{
+                "action": {
+                    "type": "text",
+                    "payload": "{\"command\":\"help\"}",
+                    "label": "🛡️ Помощь"
+                },
+                "color": "primary"
+            }],
+            [{
+                "action": {
+                    "type": "text", 
+                    "payload": "{\"command\":\"stats\"}",
+                    "label": "📊 Статистика"
+                },
+                "color": "positive"
+            }],
+            [{
+                "action": {
+                    "type": "text", 
+                    "payload": "{\"command\":\"all_links\"}",  # ← ИЗМЕНИТЕ ЭТУ СТРОКУ
+                    "label": "🔗 Все ссылки"  # ← И НАЗВАНИЕ
+                },
+                "color": "primary"
+            }],
+            [{
+                "action": {
+                    "type": "text", 
+                    "payload": "{\"command\":\"malicious_links\"}",
+                    "label": "🚫 Опасные ссылки"
+                },
+                "color": "negative"
+            }],
+            [{
+                "action": {
+                    "type": "text",
+                    "payload": "{\"command\":\"check\"}",
+                    "label": "🔍 Проверить ссылку"
+                },
+                "color": "primary"
+            }]
+        ]
+    }
+
+# Остальные функции остаются без изменений...
 def check_url_safety(url):
     """Настоящая проверка через VirusTotal API"""
     try:
         vt_api_key = os.environ.get('VIRUSTOTAL_API_KEY')
         if not vt_api_key:
-            # Если ключа нет, используем эвристику для демонстрации
             return heuristic_url_check(url)
         
         headers = {'x-apikey': vt_api_key}
         
-        # Отправляем URL для анализа
         response = requests.post(
             'https://www.virustotal.com/api/v3/urls',
             headers=headers,
@@ -227,11 +250,9 @@ def check_url_safety(url):
         if response.status_code == 200:
             analysis_id = response.json()['data']['id']
             
-            # Ждем немного для анализа
             import time
             time.sleep(2)
             
-            # Получаем результаты
             result_response = requests.get(
                 f'https://www.virustotal.com/api/v3/analyses/{analysis_id}',
                 headers=headers,
@@ -242,7 +263,6 @@ def check_url_safety(url):
                 result_data = result_response.json()
                 stats = result_data['data']['attributes']['stats']
                 
-                # Определяем безопасность по количеству "malicious"
                 is_safe = stats.get('malicious', 0) == 0
                 
                 return {
@@ -254,7 +274,6 @@ def check_url_safety(url):
                     }
                 }
         
-        # Если API недоступно, используем эвристику
         return heuristic_url_check(url)
         
     except Exception as e:
@@ -262,7 +281,7 @@ def check_url_safety(url):
         return heuristic_url_check(url)
 
 def heuristic_url_check(url):
-    """Эвристическая проверка для демонстрации (когда нет API ключа)"""
+    """Эвристическая проверка для демонстрации"""
     import random
     import time
     time.sleep(1)
@@ -298,7 +317,6 @@ def vk_callback():
             text = message['text'].lower()
             payload = message.get('payload', '{}')
             
-            # Обработка нажатий кнопок
             if payload:
                 try:
                     payload_data = json.loads(payload)
@@ -353,12 +371,9 @@ def vk_callback():
                 send_vk_message(user_id, help_message, get_main_keyboard())
                 
             elif text == '/stats':
-                # Форматируем время для красивого отображения
                 if stats['last_check']:
                     try:
-                        # Преобразуем ISO строку в datetime объект
                         last_check_dt = datetime.fromisoformat(stats['last_check'].replace('Z', '+00:00'))
-                        # Форматируем в читаемый вид
                         formatted_time = last_check_dt.strftime('%d.%m.%Y %H:%M:%S')
                     except:
                         formatted_time = stats['last_check']
@@ -387,7 +402,7 @@ def vk_callback():
 
 📋 Список опасных ссылок:
 """
-                    for i, link in enumerate(user_malicious_links[-10:], 1):  # последние 10
+                    for i, link in enumerate(user_malicious_links[-10:], 1):
                         try:
                             time_str = datetime.fromisoformat(link['timestamp'].replace('Z', '+00:00')).strftime('%d.%m.%Y %H:%M')
                         except:
@@ -397,14 +412,33 @@ def vk_callback():
                     message += f"\n⚠️ Всего обнаружено: {len(user_malicious_links)} опасных ссылок"
                 
                 send_vk_message(user_id, message, get_main_keyboard())
+            elif text == '/all_links':
+                user_links = [link for link in stats.get('link_history', []) 
+                              if link.get('user_id') == str(user_id)]
+                
+                if not user_links:
+                    message = "📊 Пока нет сохраненных ссылок\n\nСистема начнет сбор статистики при просмотре ленты VK"
+                else:
+                    # Группируем по типам
+                    vk_links = [link for link in user_links if 'vk.' in link.get('domain', '')]
+                    external_links = [link for link in user_links if 'vk.' not in link.get('domain', '')]
+                    malicious_links = [link for link in user_links if link.get('is_malicious')]
+                    
+                    message = f"""📊 ПОЛНАЯ СТАТИСТИКА ССЫЛОК
 
-                        # Ручная проверка ссылок
+Всего ссылок: {len(user_links)}
+• VK ссылки: {len(vk_links)}
+• Внешние ссылки: {len(external_links)}
+• Опасные ссылки: {len(malicious_links)}
+
+💡 Система отслеживает ВСЕ ссылки в вашей ленте"""
+                
+                send_vk_message(user_id, message, get_main_keyboard())
             elif text.startswith('/check ') or (text.startswith('http') and not text.startswith('/')):
                 url = text.replace('/check ', '').strip()
                 if not url.startswith(('http://', 'https://')):
                     url = 'https://' + url
                 
-                # Проверяем валидность URL
                 try:
                     from urllib.parse import urlparse
                     parsed = urlparse(url)
@@ -417,7 +451,6 @@ def vk_callback():
                 check_message = f"🔍 Проверяю ссылку: {url}\n\nПодождите 5-10 секунд..."
                 send_vk_message(user_id, check_message)
                 
-                # Проверка
                 result = check_url_safety(url)
                 
                 if result.get('error'):
@@ -426,8 +459,6 @@ def vk_callback():
                     if result['is_safe']:
                         details = result['details']
                         engine_results = details.get('engine_results', {})
-    
-                        # Универсальные счетчики для любого движка
                         clean_count = engine_results.get('clean', 0) or engine_results.get('harmless', 0) or 65
                         malicious_count = engine_results.get('malicious', 0) or engine_results.get('malicious', 0) or 2
     
@@ -445,8 +476,6 @@ def vk_callback():
                     else:
                         details = result['details']
                         engine_results = details.get('engine_results', {})
-    
-                        # Универсальные счетчики для любого движка
                         clean_count = engine_results.get('clean', 0) or engine_results.get('harmless', 0) or 15
                         malicious_count = engine_results.get('malicious', 0) or engine_results.get('malicious', 0) or 48
     
