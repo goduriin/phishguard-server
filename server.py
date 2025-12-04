@@ -620,58 +620,57 @@ def extract_domain(url):
 
 # Клавиатуры для бота
 def get_main_keyboard():
-    """Клавиатура для VK бота (исправленная версия)"""
+    """Клавиатура для VK бота (рабочая версия)"""
     return {
         "one_time": False,
-        "inline": False,  # Важно: обычная клавиатура, не inline
         "buttons": [
-            [{
-                "action": {
-                    "type": "text",
-                    "payload": json.dumps({"command": "help"}),
-                    "label": "🛡️ Помощь"
-                },
-                "color": "primary"
-            }],
-            [{
-                "action": {
-                    "type": "text",
-                    "payload": json.dumps({"command": "stats"}),
-                    "label": "📊 Статистика"
-                },
-                "color": "positive"
-            }],
-            [{
-                "action": {
-                    "type": "text",
-                    "payload": json.dumps({"command": "all_links"}),
-                    "label": "🔗 Все ссылки"
-                },
-                "color": "primary"
-            }],
-            [{
-                "action": {
-                    "type": "text",
-                    "payload": json.dumps({"command": "malicious_links"}),
-                    "label": "🚫 Опасные ссылки"
-                },
-                "color": "negative"
-            }],
-            [{
-                "action": {
-                    "type": "text",
-                    "payload": json.dumps({"command": "check"}),
-                    "label": "🔍 Проверить ссылку"
-                },
-                "color": "primary"
-            }]
+            [
+                {
+                    "action": {
+                        "type": "text",
+                        "payload": "{\"command\":\"help\"}",
+                        "label": "🛡️ Помощь"
+                    },
+                    "color": "primary"
+                }
+            ],
+            [
+                {
+                    "action": {
+                        "type": "text",
+                        "payload": "{\"command\":\"stats\"}",
+                        "label": "📊 Статистика"
+                    },
+                    "color": "positive"
+                }
+            ],
+            [
+                {
+                    "action": {
+                        "type": "text",
+                        "payload": "{\"command\":\"all_links\"}",
+                        "label": "🔗 Все ссылки"
+                    },
+                    "color": "primary"
+                }
+            ],
+            [
+                {
+                    "action": {
+                        "type": "text",
+                        "payload": "{\"command\":\"malicious_links\"}",
+                        "label": "🚫 Опасные ссылки"
+                    },
+                    "color": "negative"
+                }
+            ]
         ]
     }
-
-def send_vk_message(user_id, message, keyboard=None):
-    """Отправляет сообщение через VK API (исправленная версия)"""
+ 
+ def send_vk_message(user_id, message, keyboard=None):
+    """Отправляет сообщение через VK API (продакшен версия)"""
     try:
-        logger.info(f"Sending VK message to user {user_id}")
+        logger.info(f"📨 Отправка сообщения пользователю {user_id}")
         
         params = {
             'user_id': int(user_id),
@@ -682,10 +681,9 @@ def send_vk_message(user_id, message, keyboard=None):
         }
         
         if keyboard:
-            # Сериализуем клавиатуру с ensure_ascii=False
-            keyboard_json = json.dumps(keyboard, ensure_ascii=False)
-            params['keyboard'] = keyboard_json
-            logger.info(f"Keyboard JSON: {keyboard_json[:100]}...")
+            # Важно: не использовать ensure_ascii=False для VK API
+            params['keyboard'] = json.dumps(keyboard)
+            logger.debug(f"Клавиатура добавлена: {len(params['keyboard'])} символов")
         
         response = requests.post(
             'https://api.vk.com/method/messages.send',
@@ -694,26 +692,35 @@ def send_vk_message(user_id, message, keyboard=None):
         )
         
         result = response.json()
-        logger.info(f"VK API response: {result}")
+        logger.info(f"VK API ответ: {result}")
         
         if 'error' in result:
             error = result['error']
-            logger.error(f"VK API Error {error.get('error_code')}: {error.get('error_msg')}")
+            error_code = error.get('error_code')
+            error_msg = error.get('error_msg')
             
-            # Проверяем распространённые ошибки
-            if error.get('error_code') == 901:
-                logger.error("❌ Can't send messages for users without permission")
-            elif error.get('error_code') == 902:
-                logger.error("❌ Can't send messages to this user due to their privacy settings")
-            elif error.get('error_code') == 7:
-                logger.error("❌ Permission denied. Check bot token and permissions")
+            logger.error(f"❌ VK API ошибка {error_code}: {error_msg}")
+            
+            # Частые ошибки и их решения
+            error_solutions = {
+                901: "Разрешите сообществу отправлять сообщения в настройках",
+                902: "Пользователь должен начать диалог первым",
+                7: "Проверьте токен и права бота",
+                914: "Сообщение слишком длинное",
+                935: "Слишком много сообщений в секунду"
+            }
+            
+            if error_code in error_solutions:
+                logger.error(f"💡 Решение: {error_solutions[error_code]}")
             
             return False
+            
+        logger.info(f"✅ Сообщение отправлено пользователю {user_id}")
         return True
             
     except Exception as e:
-        logger.error(f"Send message error: {e}")
-        return False
+        logger.error(f"❌ Ошибка отправки сообщения: {e}")
+        return False       
 
 @app.route('/vk-callback', methods=['POST'])
 @rate_limit
@@ -765,18 +772,18 @@ def vk_callback():
             elif text in ['help', '/help']:
                 help_message = """🛡️ **PhishGuard - защита от фишинга**
 
-**Как это работает:**
+Как это работает:
 1. Установите расширение в браузере
 2. Расширение автоматически проверяет ссылки в ВК
 3. При обнаружении фишинга вы получите уведомление
 
-**Команды:**
+Команды:
 • Статистика - просмотр статистики проверок
 • Все ссылки - история проверенных ссылок
 • Опасные ссылки - список обнаруженных угроз
 • Проверить ссылку - ручная проверка ссылки
 
-**Безопасность:** Все проверки защищены HMAC-шифрованием."""
+Безопасность: Все проверки защищены HMAC-шифрованием."""
                 send_vk_message(user_id, help_message, get_main_keyboard())
                 
             elif text in ['stats', '/stats']:
@@ -834,6 +841,59 @@ def vk_callback():
         traceback.print_exc()
         return 'ok'
 
+@app.route('/send-welcome/<int:user_id>', methods=['GET'])
+def send_welcome(user_id):
+    """Принудительно отправляет приветственное сообщение"""
+    try:
+        welcome_message = """👋 Привет! Это PhishGuard бот!
+
+Я отправляю уведомления об опасных ссылках в ВК.
+
+⚠️ Если вы получили это сообщение - значит бот работает!
+⚠️ Если кнопки не отображаются - проверьте настройки клавиатуры.
+
+📌 **Для настройки расширения:**
+1. Установите расширение из магазина
+2. Авторизуйтесь в ВК
+3. Расширение начнет работу автоматически
+
+👇 Проверьте, видны ли кнопки:"""
+        
+        success = send_vk_message(user_id, welcome_message, get_main_keyboard())
+        
+        if success:
+            return jsonify({
+                "status": "success",
+                "message": f"Welcome message sent to {user_id}",
+                "keyboard_sent": True,
+                "timestamp": datetime.now().isoformat()
+            })
+        else:
+            return jsonify({
+                "status": "error",
+                "message": "Failed to send welcome message"
+            }), 500
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/bot-status', methods=['GET'])
+def bot_status():
+    """Проверяет состояние VK бота"""
+    try:
+        return jsonify({
+            "status": "running",
+            "vk_token_set": bool(VK_TOKEN),
+            "confirmation_code_set": bool(os.environ.get('VK_CONFIRMATION_CODE')),
+            "total_users": len(stats['users']),
+            "total_checks": stats['total_checks'],
+            "malicious_detected": stats['malicious_count'],
+            "keyboard_enabled": True,
+            "server_time": datetime.now().isoformat()
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
 # ==================== ЗАПУСК СЕРВЕРА ====================
 if __name__ == '__main__':
     print("🚀 Starting PhishGuard Server with FIXED HMAC...")
