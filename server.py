@@ -109,39 +109,6 @@ def add_security_headers(response):
     return response
 
 # ==================== CORS PROTECTION DECORATOR ====================
-def cors_protected(f):
-    """Декоратор для дополнительной защиты CORS"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        # Для OPTIONS запросов - пропускаем (уже обработано Flask-CORS)
-        if request.method == 'OPTIONS':
-            return f(*args, **kwargs)
-            
-        try:
-            # Проверяем origin для POST/GET запросов
-            origin = request.headers.get('Origin')
-            
-            # Если есть Origin - проверяем
-            if origin and not check_origin_allowed(origin):
-                # Используем print пока logger не инициализирован
-                print(f"⚠️ Blocked CORS request from unauthorized origin: {origin}")
-                return jsonify({
-                    "error": "CORS policy violation",
-                    "message": "Origin not allowed",
-                    "allowed_origins": [
-                        "vk.com",
-                        "vk.ru", 
-                        "phishguard-server-production.up.railway.app"
-                    ]
-                }), 403
-            
-            # Выполняем основной код
-            return f(*args, **kwargs)
-        except Exception as e:
-            print(f"❌ CORS protection error: {e}")
-            return jsonify({"error": "CORS check failed"}), 500
-    
-    return decorated_function
 
 # ==================== КОНФИГУРАЦИЯ HMAC ====================
 # Конфигурация из переменных окружения
@@ -349,7 +316,6 @@ logger = setup_logging()
 
 # ==================== ENDPOINTS ====================
 @app.route('/')
-@cors_protected
 def home():
     return jsonify({
         "status": "PhishGuard Server is running!",
@@ -359,7 +325,6 @@ def home():
     })
 
 @app.route('/health')
-@cors_protected
 def health():
     """Health check endpoint"""
     services = {
@@ -413,7 +378,6 @@ def health():
     return jsonify(services)
 
 @app.route('/api/hmac-test', methods=['POST'])
-@cors_protected
 def hmac_test():
     """Тестовый endpoint для проверки HMAC"""
     try:
@@ -444,7 +408,6 @@ def options_check_result():
 @app.route('/api/check-result', methods=['POST'])
 @hmac_required
 @rate_limit
-@cors_protected
 def handle_check_result():
     """Принимает результаты проверки от расширения (с HMAC)"""
     try:
@@ -537,7 +500,6 @@ def options_report_link():
 @app.route('/api/report-link', methods=['POST'])
 @hmac_required
 @rate_limit
-@cors_protected
 def handle_link_report():
     """Принимает отчеты о ссылках (с HMAC)"""
     try:
@@ -687,7 +649,6 @@ def send_vk_message(user_id, message, keyboard=None):
 
 @app.route('/vk-callback', methods=['POST'])
 @rate_limit
-@cors_protected
 def vk_callback():
     """Обработчик Callback API для VK"""
     try:
@@ -997,8 +958,8 @@ def save_stats_periodically():
                 'malicious_count': stats['malicious_count'],
                 'users': list(stats['users']),
                 'last_check': stats['last_check'],
-                'malicious_links': stats['malicious_links'][-50],
-                'link_history': stats['link_history'][-500],
+                'malicious_links': stats['malicious_links'][-50:],
+                'link_history': stats['link_history'][-500:],
                 'saved_at': datetime.now().isoformat()
             }
             
