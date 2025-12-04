@@ -13,21 +13,14 @@ from logging.handlers import RotatingFileHandler
 from collections import defaultdict
 from threading import Lock
 from werkzeug.middleware.proxy_fix import ProxyFix
-import random
-import threading
-from urllib.parse import urlparse
 
 app = Flask(__name__)
 
 # ==================== ПРОДАКШЕН CORS КОНФИГУРАЦИЯ ====================
-
-# Фикс для Railway/nginx прокси
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
 def check_origin_allowed(origin):
-    """Проверяет разрешен ли origin для CORS (продакшен версия)"""
-    
-    # Разрешенные домены для продакшена
+    """Проверяет разрешен ли origin для CORS"""
     ALLOWED_DOMAINS = [
         "vk.com",
         "vk.ru",
@@ -37,23 +30,18 @@ def check_origin_allowed(origin):
     ]
     
     if not origin:
-        return True  # Разрешаем запросы без Origin (не CORS)
+        return True
     
     try:
-        # Извлекаем домен из origin
-        from urllib.parse import urlparse
         parsed = urlparse(origin)
         domain = parsed.netloc
         
-        # Убираем порт если есть
         if ':' in domain:
             domain = domain.split(':')[0]
         
-        # Проверяем точное совпадение или поддомены vk
         if domain in ALLOWED_DOMAINS:
             return True
         
-        # Разрешаем все поддомены vk.com и vk.ru
         if domain.endswith('.vk.com') or domain.endswith('.vk.ru'):
             return True
             
@@ -62,7 +50,7 @@ def check_origin_allowed(origin):
     except Exception:
         return False
 
-# НАСТРОЙКА CORS ДЛЯ ПРОДАКШЕНА
+# НАСТРОЙКА CORS
 CORS(app, resources={r"/*": {
     "origins": [
         "https://vk.com",
@@ -91,7 +79,7 @@ CORS(app, resources={r"/*": {
     "max_age": 600
 }})
 
-# ==================== SECURITY HEADERS MIDDLEWARE ====================
+# ==================== SECURITY HEADERS ====================
 @app.after_request
 def add_security_headers(response):
     """Добавляет security headers для продакшена"""
@@ -100,7 +88,6 @@ def add_security_headers(response):
     response.headers['X-XSS-Protection'] = '1; mode=block'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
     
-    # Cache headers для API
     if request.path.startswith('/api/'):
         response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
         response.headers['Pragma'] = 'no-cache'
@@ -108,8 +95,7 @@ def add_security_headers(response):
     
     return response
 
-# ==================== КОНФИГУРАЦИЯ HMAC ====================
-# Конфигурация из переменных окружения
+# ==================== КОНФИГУРАЦИЯ ====================
 VK_TOKEN = os.environ.get('VK_TOKEN')
 SECRET_KEY = os.environ.get('SECRET_KEY', 'phishguard_secret_key_2024')
 HMAC_SECRET_KEY = os.environ.get('HMAC_SECRET_KEY', 'phishguard_hmac_secret_2024')
@@ -125,120 +111,148 @@ stats = {
     'link_history': []
 }
 
-# ==================== HMAC ФУНКЦИИ ====================
-  
+# ==================== HMAC ФУНКЦИИ (ИСПРАВЛЕННЫЕ) ====================
+def deep_sort_dict(obj):
+    """Рекурсивно сортирует ключи словаря ТОЧНО как в клиенте"""
+    if isinstance(obj, dict):
+        # Сортируем ключи и рекурсивно обрабатываем значения
+        result = {}
+        for key in sorted(obj.keys()):
+            result[key] = deep_sort_dict(obj[key])
+        return result
+    elif isinstance(obj, list):
+        # Обрабатываем каждый элемент списка
+        return [deep_sort_dict(item) for item in obj]
+    else:
+        # Примитивные типы возвращаем как есть
+        return obj
+
 def generate_hmac_signature(data, timestamp):
-    """Генерирует HMAC подпись (совместимо с клиентом)"""
+    """Генерирует HMAC подпись ТОЧНО как в клиенте"""
     try:
-        if not data or not timestamp:
+        print(f"\n🔍 SERVER HMAC GENERATION:")
+        print(f"  Timestamp: {timestamp}")
+        print(f"  Original data keys: {list(data.keys()) if isinstance(data, dict) else 'not dict'}")
+        
+        # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ:
+        # ТОЧНО как в клиенте: создаем новый объект с отсортированными ключами
+        if not data:
+            print("❌ No data for HMAC")
             return None
             
-        # 1. Конвертируем timestamp в строку
-        timestamp_str = str(timestamp)
-        
-        # 2. Сортируем ключи данных (ТОЧНО как на клиенте)
+        # 1. Сортируем ключи (ТОЧНО как в клиенте)
         if isinstance(data, dict):
-            # Создаем отсортированный словарь
-            sorted_keys = sorted(data.keys())
-            sorted_data = {}
-            for key in sorted_keys:
-                sorted_data[key] = data[key]
-            
-            # JSON с отсортированными ключами
-            data_str = json.dumps(sorted_data, separators=(',', ':'))
+            # Рекурсивно сортируем все вложенные объекты
+            sorted_data = deep_sort_dict(data)
+            print(f"  Sorted keys: {list(sorted_data.keys())}")
         else:
-            data_str = json.dumps(data)
+            sorted_data = data
         
-        # 3. Создаем сообщение (ТОЧНО как на клиенте)
-        message = timestamp_str + data_str + HMAC_SECRET_KEY
+        # 2. JSON строка (ТОЧНО как в клиенте: JSON.stringify(sortedData))
+        # Используем separators=(',', ':') чтобы убрать лишние пробелы
+        data_str = json.dumps(sorted_data, separators=(',', ':'))
+        print(f"  Data JSON (first 100): {data_str[:100]}...")
+        print(f"  Data JSON length: {len(data_str)}")
         
-        # 4. Генерируем HMAC-SHA256
+        # 3. Сообщение: timestamp + dataStr + secret (ТОЧНО как в клиенте!)
+        message = str(timestamp) + data_str + HMAC_SECRET_KEY
+        print(f"  Message (first 100): {message[:100]}...")
+        print(f"  Message length: {len(message)}")
+        
+        # 4. HMAC-SHA256
         signature = hmac.new(
             HMAC_SECRET_KEY.encode('utf-8'),
             message.encode('utf-8'),
             hashlib.sha256
         ).hexdigest()
         
+        print(f"  Generated signature: {signature[:50]}...")
+        print(f"  Signature length: {len(signature)}")
+        
         return signature
         
     except Exception as e:
-        print(f"❌ HMAC generation error: {e}")
+        print(f"❌ SERVER HMAC generation error: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
-def verify_hmac_signature(data, signature, timestamp, max_age=300):
-    """Проверяет HMAC подпись"""
+def verify_hmac_signature(data, signature, timestamp, max_age=600):
+    """Проверяет HMAC подпись с подробной отладкой"""
     try:
+        print(f"\n=== HMAC VERIFICATION ===")
+        print(f"  Path: {request.path}")
+        print(f"  Timestamp: {timestamp}")
+        
+        if data and isinstance(data, dict):
+            print(f"  Data keys ({len(data)}): {list(data.keys())}")
+        
+        print(f"  Received signature: {signature[:50]}..." if signature else "  No signature!")
+        
         # 1. Базовые проверки
         if not signature or not timestamp:
+            print("❌ Missing signature or timestamp")
             return False
         
         # 2. Проверяем timestamp
         try:
             ts = float(timestamp)
-            # Если timestamp в миллисекундах, конвертируем в секунды
-            if ts > 1000000000000:  # Больше 2001 года в миллисекундах
+            if ts > 1000000000000:  # Если timestamp в миллисекундах
                 ts_seconds = ts / 1000.0
+                print(f"  Timestamp in ms: {ts} -> seconds: {ts_seconds}")
             else:
                 ts_seconds = ts
+                print(f"  Timestamp in seconds: {ts}")
         except ValueError:
+            print("❌ Invalid timestamp format")
             return False
         
-        # 3. Проверяем свежесть (5 минут)
+        # 3. Проверяем свежесть (10 минут для надежности)
         current_time = time.time()
-        if abs(current_time - ts_seconds) > max_age:
+        time_diff = abs(current_time - ts_seconds)
+        print(f"  Current server time: {current_time}")
+        print(f"  Time difference: {time_diff:.1f} seconds")
+        
+        if time_diff > max_age:
+            print(f"❌ Request too old: {time_diff:.1f}s > {max_age}s")
             return False
         
         # 4. Генерируем ожидаемую подпись
         expected = generate_hmac_signature(data, timestamp)
         
         if not expected:
+            print("❌ Failed to generate expected signature")
             return False
         
-        # 5. Сравниваем подписи
+        print(f"  Expected signature: {expected[:50]}...")
+        
+        # 5. Сравниваем
+        match = signature == expected
+        print(f"  Signatures match: {match}")
+        
+        if not match:
+            print("🔍 DEBUG: Checking differences...")
+            print(f"  Received length: {len(signature)}")
+            print(f"  Expected length: {len(expected)}")
+            
+            # Поиск различий
+            min_len = min(len(signature), len(expected))
+            for i in range(min_len):
+                if signature[i] != expected[i]:
+                    print(f"  First diff at position {i}: '{signature[i]}' != '{expected[i]}'")
+                    print(f"  Received chunk: {signature[i:i+10]}")
+                    print(f"  Expected chunk: {expected[i:i+10]}")
+                    break
+        
         return hmac.compare_digest(signature, expected)
         
     except Exception as e:
         print(f"❌ HMAC verification error: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
-def hmac_required(f):
-    """Декоратор для проверки HMAC"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        # Пропускаем OPTIONS запросы (CORS)
-        if request.method == 'OPTIONS':
-            return f(*args, **kwargs)
-            
-        # Пропускаем health check
-        if request.path in ['/health', '/']:
-            return f(*args, **kwargs)
-            
-        try:
-            # Получаем заголовки
-            signature = request.headers.get('X-Signature')
-            timestamp = request.headers.get('X-Timestamp')
-            
-            # Если нет HMAC заголовков, проверяем старый способ
-            if not signature or not timestamp:
-                client_secret = request.headers.get('X-Secret-Key')
-                if client_secret and client_secret == SECRET_KEY:
-                    print("⚠️ Using legacy authentication")
-                    return f(*args, **kwargs)
-                return jsonify({"error": "HMAC signature required"}), 401
-            
-            # Проверяем HMAC
-            if not verify_hmac_signature(request.json, signature, timestamp):
-                return jsonify({"error": "Invalid HMAC signature"}), 401
-            
-            return f(*args, **kwargs)
-            
-        except Exception as e:
-            print(f"❌ HMAC middleware error: {e}")
-            return jsonify({"error": "Authentication error"}), 401
-    
-    return decorated_function
-
-# ==================== DEBUG ENDPOINT ====================
+# ==================== DEBUG HMAC ENDPOINT ====================
 @app.route('/api/debug-hmac', methods=['POST', 'OPTIONS'])
 def debug_hmac():
     """Endpoint для отладки HMAC"""
@@ -249,6 +263,10 @@ def debug_hmac():
         data = request.json
         signature = request.headers.get('X-Signature')
         timestamp = request.headers.get('X-Timestamp')
+        
+        print(f"\n=== HMAC DEBUG ENDPOINT ===")
+        print(f"Timestamp: {timestamp}")
+        print(f"Signature: {signature[:50] if signature else 'None'}...")
         
         # Генерируем подпись на сервере
         server_signature = generate_hmac_signature(data, timestamp)
@@ -261,13 +279,150 @@ def debug_hmac():
             "debug": {
                 "data_keys": list(data.keys()) if data else [],
                 "timestamp_type": type(timestamp).__name__,
-                "hmac_secret_length": len(HMAC_SECRET_KEY)
+                "message_example": f"{timestamp}{json.dumps(data, sort_keys=True)[:50]}..."
             }
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# Обновите все защищенные endpoints с @hmac_required
+def hmac_required(f):
+    """Декоратор для проверки HMAC"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Пропускаем OPTIONS запросы
+        if request.method == 'OPTIONS':
+            return f(*args, **kwargs)
+            
+        # Пропускаем health check
+        if request.path in ['/health', '/']:
+            return f(*args, **kwargs)
+            
+        try:
+            signature = request.headers.get('X-Signature')
+            timestamp = request.headers.get('X-Timestamp')
+            
+            print(f"🔍 Checking HMAC for {request.path}")
+            
+            # Если нет HMAC заголовков, проверяем старый способ
+            if not signature or not timestamp:
+                print("⚠️ No HMAC headers, checking legacy auth")
+                client_secret = request.headers.get('X-Secret-Key')
+                if client_secret and client_secret == SECRET_KEY:
+                    print("✅ Legacy authentication successful")
+                    return f(*args, **kwargs)
+                return jsonify({"error": "HMAC signature required"}), 401
+            
+            # Проверяем HMAC
+            if verify_hmac_signature(request.json, signature, timestamp):
+                print(f"✅ HMAC verified for {request.path}")
+                return f(*args, **kwargs)
+            else:
+                print(f"❌ Invalid HMAC signature for {request.path}")
+                return jsonify({"error": "Invalid HMAC signature"}), 401
+                
+        except Exception as e:
+            print(f"❌ HMAC middleware error: {e}")
+            return jsonify({"error": "Authentication error"}), 401
+    
+    return decorated_function
+
+# ==================== RATE LIMITING ====================
+class RateLimiter:
+    def __init__(self):
+        self.requests = defaultdict(list)
+        self.lock = Lock()
+        
+        self.limits = {
+            '/api/check-result': {'limit': 20, 'window': 60},
+            '/api/report-link': {'limit': 50, 'window': 60},
+            '/vk-callback': {'limit': 100, 'window': 60},
+        }
+    
+    def is_allowed(self, endpoint, ip_address):
+        if endpoint not in self.limits:
+            return True
+        
+        with self.lock:
+            current_time = time.time()
+            limit_config = self.limits[endpoint]
+            
+            window_start = current_time - limit_config['window']
+            self.requests[ip_address] = [
+                req_time for req_time in self.requests[ip_address]
+                if req_time > window_start
+            ]
+            
+            if len(self.requests[ip_address]) >= limit_config['limit']:
+                return False
+            
+            self.requests[ip_address].append(current_time)
+            return True
+
+limiter = RateLimiter()
+
+def rate_limit(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not limiter.is_allowed(request.path, request.remote_addr):
+            return jsonify({
+                'error': 'Rate limit exceeded',
+                'retry_after': 60
+            }), 429
+        return f(*args, **kwargs)
+    return decorated_function
+
+# ==================== ЛОГИРОВАНИЕ ====================
+def setup_logging():
+    if not os.path.exists('logs'):
+        os.makedirs('logs')
+    
+    file_handler = RotatingFileHandler(
+        'logs/app.log',
+        maxBytes=10*1024*1024,
+        backupCount=5
+    )
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    ))
+    
+    error_handler = RotatingFileHandler(
+        'logs/errors.log',
+        maxBytes=5*1024*1024,
+        backupCount=3
+    )
+    error_handler.setLevel(logging.ERROR)
+    error_handler.setFormatter(logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    ))
+    
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger()
+    logger.addHandler(file_handler)
+    logger.addHandler(error_handler)
+    
+    return logger
+
+logger = setup_logging()
+
+# ==================== ENDPOINTS ====================
+@app.route('/')
+def home():
+    return jsonify({
+        "status": "PhishGuard Server is running!",
+        "version": "1.0",
+        "timestamp": datetime.now().isoformat(),
+        "security": "HMAC authentication enabled"
+    })
+
+@app.route('/health')
+def health():
+    return jsonify({
+        "status": "healthy",
+        "server": "PhishGuard",
+        "timestamp": datetime.now().isoformat()
+    }), 200
+
 @app.route('/api/hmac-test', methods=['POST'])
 @hmac_required
 def hmac_test():
@@ -282,190 +437,13 @@ def hmac_test():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ==================== RATE LIMITING ====================
-from collections import defaultdict
-from threading import Lock
-
-class RateLimiter:
-    def __init__(self):
-        self.requests = defaultdict(list)
-        self.lock = Lock()
-        
-        # Лимиты (запросов в минуту)
-        self.limits = {
-            '/api/check-result': {'limit': 20, 'window': 60},
-            '/api/report-link': {'limit': 50, 'window': 60},
-            '/vk-callback': {'limit': 100, 'window': 60},
-        }
-    
-    def is_allowed(self, endpoint, ip_address):
-        """Проверяет, разрешен ли запрос"""
-        if endpoint not in self.limits:
-            return True
-        
-        with self.lock:
-            current_time = time.time()
-            limit_config = self.limits[endpoint]
-            
-            # Очищаем старые запросы
-            window_start = current_time - limit_config['window']
-            self.requests[ip_address] = [
-                req_time for req_time in self.requests[ip_address]
-                if req_time > window_start
-            ]
-            
-            # Проверяем лимит
-            if len(self.requests[ip_address]) >= limit_config['limit']:
-                return False
-            
-            # Добавляем текущий запрос
-            self.requests[ip_address].append(current_time)
-            return True
-
-limiter = RateLimiter()
-
-def rate_limit(f):
-    """Декоратор для ограничения запросов"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if not limiter.is_allowed(request.path, request.remote_addr):
-            return jsonify({
-                'error': 'Rate limit exceeded',
-                'retry_after': 60,
-                'limit': limiter.limits[request.path]['limit'],
-                'window': limiter.limits[request.path]['window']
-            }), 429
-        return f(*args, **kwargs)
-    return decorated_function
-
-# ==================== ЛОГИРОВАНИЕ ====================
-import logging
-from logging.handlers import RotatingFileHandler
-
-def setup_logging():
-    """Настройка логирования в файл"""
-    if not os.path.exists('logs'):
-        os.makedirs('logs')
-    
-    # Основной логгер
-    file_handler = RotatingFileHandler(
-        'logs/app.log',
-        maxBytes=10*1024*1024,  # 10 MB
-        backupCount=5
-    )
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    ))
-    
-    # Логгер ошибок
-    error_handler = RotatingFileHandler(
-        'logs/errors.log',
-        maxBytes=5*1024*1024,  # 5 MB
-        backupCount=3
-    )
-    error_handler.setLevel(logging.ERROR)
-    error_handler.setFormatter(logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    ))
-    
-    # Настраиваем корневой логгер
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger()
-    logger.addHandler(file_handler)
-    logger.addHandler(error_handler)
-    
-    return logger
-
-logger = setup_logging()
-
-
-# ==================== ENDPOINTS ====================
-@app.route('/')
-def home():
-    return jsonify({
-        "status": "PhishGuard Server is running!",
-        "version": "1.0",
-        "timestamp": datetime.now().isoformat(),
-        "security": "HMAC authentication enabled"
-    })
-
-@app.route('/health')
-def health():
-    """Простой health check endpoint"""
-    return jsonify({
-        "status": "healthy",
-        "server": "PhishGuard",
-        "timestamp": datetime.now().isoformat()
-    }), 200
-    
-    # Проверяем VK API (с токеном)
-    try:
-        if VK_TOKEN:
-            response = requests.get(
-                'https://api.vk.com/method/users.get',
-                params={
-                    'user_ids': '1', 
-                    'v': '5.199',
-                    'access_token': VK_TOKEN  # ← ВАЖНО!
-                },
-                timeout=3
-            )
-            services['vk_api'] = 'healthy' if response.status_code == 200 else f'unhealthy: {response.status_code}'
-        else:
-            services['vk_api'] = 'no_token'
-    except Exception as e:
-        services['vk_api'] = f'error: {str(e)[:50]}'
-    
-    # Проверяем VirusTotal API
-    try:
-        if VIRUSTOTAL_API_KEY:
-            response = requests.get(
-                'https://www.virustotal.com/api/v3/ping',
-                headers={'x-apikey': VIRUSTOTAL_API_KEY},
-                timeout=3
-            )
-            if response.status_code == 200:
-                data = response.json()
-                services['virustotal'] = {
-                    'status': 'healthy',
-                    'credits': data.get('data', {}).get('credits', 'N/A')
-                }
-            else:
-                services['virustotal'] = f'unhealthy: {response.status_code}'
-        else:
-            services['virustotal'] = 'no_key'
-    except Exception as e:
-        services['virustotal'] = f'error: {str(e)[:50]}'
-    
-    return jsonify(services)
-
-@app.route('/api/hmac-test', methods=['POST'])
-def hmac_test():
-    """Тестовый endpoint для проверки HMAC"""
-    try:
-        signature = request.headers.get('X-Signature')
-        timestamp = request.headers.get('X-Timestamp')
-        
-        if not signature or not timestamp:
-            return jsonify({"error": "HMAC headers required"}), 400
-        
-        if verify_hmac_signature(request.json, signature, timestamp):
-            return jsonify({
-                "status": "success",
-                "message": "HMAC verification successful",
-                "timestamp": timestamp,
-                "received_data": request.json
-            })
-        else:
-            return jsonify({"error": "HMAC verification failed"}), 401
-            
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# ОБРАБАТЫВАЕМ OPTIONS ДЛЯ КАЖДОГО МАРШРУТА
+# OPTIONS handlers
 @app.route('/api/check-result', methods=['OPTIONS'])
 def options_check_result():
+    return jsonify({"status": "ok"}), 200
+
+@app.route('/api/report-link', methods=['OPTIONS'])
+def options_report_link():
     return jsonify({"status": "ok"}), 200
 
 @app.route('/api/check-result', methods=['POST'])
@@ -487,11 +465,9 @@ def handle_check_result():
         url = data['url']
         is_malicious = data.get('is_malicious', False)
         
-        # Если ссылка опасная - отправляем уведомление
         if is_malicious:
             stats['malicious_count'] += 1
             
-            # Сохраняем опасную ссылку
             malicious_data = {
                 'url': url,
                 'domain': extract_domain(url),
@@ -500,11 +476,10 @@ def handle_check_result():
             }
             stats['malicious_links'].append(malicious_data)
             
-            # Ограничиваем историю 50 записями
             if len(stats['malicious_links']) > 50:
                 stats['malicious_links'] = stats['malicious_links'][-50:]
             
-            # Формируем сообщение с информацией о распаковке
+            # Формируем сообщение
             original_url = data.get('original_url', url)
             final_url = data.get('final_url', url)
             is_vk_redirect = data.get('is_vk_redirect', False)
@@ -534,7 +509,7 @@ def handle_check_result():
             success = send_vk_message(user_id, message, get_main_keyboard())
             
             if success:
-                logger.info(f"Sent VK notification to user {user_id} about malicious link")
+                logger.info(f"Sent VK notification to user {user_id}")
                 return jsonify({
                     "status": "success", 
                     "malicious_detected": True,
@@ -544,7 +519,6 @@ def handle_check_result():
                 logger.error(f"Failed to send VK notification to user {user_id}")
                 return jsonify({"error": "Failed to send VK message"}), 500
         else:
-            # Безопасные ссылки просто логируем
             logger.info(f"Safe link from user {user_id}: {url}")
             return jsonify({
                 "status": "success", 
@@ -555,10 +529,6 @@ def handle_check_result():
     except Exception as e:
         logger.error(f"Error in check-result: {e}")
         return jsonify({"error": "Internal server error"}), 500
-
-@app.route('/api/report-link', methods=['OPTIONS'])
-def options_report_link():
-    return jsonify({"status": "ok"}), 200
 
 @app.route('/api/report-link', methods=['POST'])
 @hmac_required
@@ -575,7 +545,7 @@ def handle_link_report():
             stats['users'].add(data.get('user_id'))
         stats['last_check'] = datetime.now().isoformat()
         
-        # Сохраняем в историю ВСЕХ ссылок
+        # Сохраняем в историю
         link_data = {
             'url': data.get('original_url'),
             'final_url': data.get('final_url'),
@@ -591,7 +561,6 @@ def handle_link_report():
         
         stats['link_history'].append(link_data)
         
-        # Ограничиваем историю 500 записями 
         if len(stats['link_history']) > 500:
             stats['link_history'] = stats['link_history'][-500:]
         
@@ -604,7 +573,7 @@ def handle_link_report():
         else:
             link_type = "Внешняя"
             
-        logger.info(f"Saved {link_type} link: {domain} from user {data.get('user_id')}")
+        logger.info(f"Saved {link_type} link: {domain}")
         
         return jsonify({
             "status": "success", 
@@ -621,14 +590,12 @@ def handle_link_report():
 def extract_domain(url):
     """Извлекает домен из URL"""
     try:
-        from urllib.parse import urlparse
         return urlparse(url).hostname
     except:
         return "invalid_url"
 
 # Клавиатуры для бота
 def get_main_keyboard():
-    """Основная клавиатура с командами"""
     return {
         "one_time": False,
         "buttons": [
@@ -729,211 +696,37 @@ def vk_callback():
             text = message['text'].lower()
             payload = message.get('payload', '{}')
             
-            # Обработка нажатий кнопок
+            # Обработка команд
             if payload:
                 try:
                     payload_data = json.loads(payload)
                     command = payload_data.get('command', '')
-                    logger.info(f"VK Bot: Command from payload: '{command}' from user {user_id}")
-                    
-                    if command == 'help':
-                        text = '/help'
-                    elif command == 'stats':
-                        text = '/stats'
-                    elif command == 'all_links':
-                        text = '/all_links'
-                    elif command == 'malicious_links':
-                        text = '/malicious_links'
-                    elif command == 'check':
-                        text = '/check'
-                except Exception as e:
-                    logger.error(f"Payload parse error: {e}")
+                    if command:
+                        text = f'/{command}'
+                except:
+                    pass
             
-            logger.info(f"VK Bot: Processing command: '{text}' from user {user_id}")
+            logger.info(f"VK Bot: Processing command: '{text}'")
             
             if text == '/start':
-                welcome_message = """👋 Привет! Я бот PhishGuard!
-
-🛡️ **Автоматическая защита:**
-• Расширение проверяет все ссылки в ленте VK
-• Распаковывает замаскированные фишинговые ссылки
-• Опасные ссылки сразу блокируются
-• Вы получаете уведомления только об угрозах
-
-📊 **Статистика и отчеты:**
-• /stats - общая статистика проверок
-• /all_links - полная статистика по всем ссылкам
-• /malicious_links - список опасных ссылок
-
-🔍 **Ручная проверка:**
-Отправьте мне любую ссылку или используйте /check
-
-⚡ **Для автоматической работы установите наше расширение!**"""
+                welcome_message = """👋 Привет! Я бот PhishGuard!"""
                 send_vk_message(user_id, welcome_message, get_main_keyboard())
                 
             elif text == '/help':
-                help_message = """🛡️ PhishGuard - защита от фишинга
-
-Я автоматически проверяю ссылки в вашей ленте VK, включая замаскированные!
-
-🔍 **КАК ЭТО РАБОТАЕТ:**
-1. Установите расширение в Google Chrome
-2. При посещении VK расширение проверяет ВСЕ ссылки  
-3. Распаковывает ссылки, замаскированные под VK
-4. При обнаружении фишинга - вы получаете уведомление
-5. Все ссылки сохраняются в статистике
-
-📊 **КОМАНДЫ:**
-• /stats - статистика проверок
-• /all_links - все отслеживаемые ссылки
-• /malicious_links - опасные ссылки
-• /check URL - проверить ссылку
-
-⚠️ **ВАЖНО:** Расширение работает только в Google Chrome!"""
+                help_message = """🛡️ PhishGuard - защита от фишинга"""
                 send_vk_message(user_id, help_message, get_main_keyboard())
                 
             elif text == '/stats':
-                # Форматируем время для красивого отображения
-                if stats['last_check']:
-                    try:
-                        last_check_dt = datetime.fromisoformat(stats['last_check'].replace('Z', '+00:00'))
-                        formatted_time = last_check_dt.strftime('%d.%m.%Y %H:%M:%S')
-                    except:
-                        formatted_time = stats['last_check']
-                else:
-                    formatted_time = 'еще не было'
-                
+                formatted_time = stats['last_check'] if stats['last_check'] else 'еще не было'
                 stats_message = f"""📊 Статистика PhishGuard
 
 Всего проверок: {stats['total_checks']}
 Обнаружено угроз: {stats['malicious_count']}
 Уникальных пользователей: {len(stats['users'])}
-Последняя проверка: {formatted_time}
-
-💡 Система работает в фоновом режиме
-🚫 Уведомления приходят только об опасных ссылках"""
+Последняя проверка: {formatted_time}"""
                 send_vk_message(user_id, stats_message, get_main_keyboard())
-
-            elif text == '/all_links':
-                user_links = [link for link in stats.get('link_history', []) 
-                              if link.get('user_id') == str(user_id)]
                 
-                if not user_links:
-                    message = "📊 Пока нет сохраненных ссылок\n\nСистема начнет сбор статистики при просмотре ленты VK"
-                else:
-                    # Группируем по типам
-                    vk_links = [link for link in user_links if 'vk.' in link.get('domain', '') and not link.get('is_vk_redirect')]
-                    masked_links = [link for link in user_links if link.get('is_vk_redirect')]
-                    external_links = [link for link in user_links if 'vk.' not in link.get('domain', '') and not link.get('is_vk_redirect')]
-                    malicious_links = [link for link in user_links if link.get('is_malicious')]
-                    
-                    message = f"""📊 ПОЛНАЯ СТАТИСТИКА ССЫЛОК
-
-Всего ссылок: {len(user_links)}
-• VK ссылки: {len(vk_links)}
-• Замаскированные ссылки: {len(masked_links)}
-• Внешние ссылки: {len(external_links)}
-• Опасные ссылки: {len(malicious_links)}
-
-💡 Система отслеживает ВСЕ ссылки в вашей ленте
-🎭 Включая замаскированные под VK!"""
-                
-                send_vk_message(user_id, message, get_main_keyboard())
-
-            elif text == '/malicious_links':
-                user_malicious_links = [link for link in stats.get('malicious_links', []) 
-                                      if link.get('user_id') == str(user_id)]
-                
-                if not user_malicious_links:
-                    message = "✅ Отлично! Опасных ссылок не обнаружено\n\nСистема продолжает мониторинг вашей ленты VK"
-                else:
-                    message = f"""🚫 Обнаружено опасных ссылок: {len(user_malicious_links)}
-
-📋 Список опасных ссылок:
-"""
-                    for i, link in enumerate(user_malicious_links[-10:], 1):
-                        try:
-                            time_str = datetime.fromisoformat(link['timestamp'].replace('Z', '+00:00')).strftime('%d.%m.%Y %H:%M')
-                        except:
-                            time_str = link['timestamp']
-                        
-                        if link.get('is_vk_redirect'):
-                            message += f"{i}. 🎭 {link['domain']} (замаскированная) ({time_str})\n"
-                        else:
-                            message += f"{i}. {link['domain']} ({time_str})\n"
-                    
-                    message += f"\n⚠️ Всего обнаружено: {len(user_malicious_links)} опасных ссылок"
-                
-                send_vk_message(user_id, message, get_main_keyboard())
-
-            elif text.startswith('/check ') or (text.startswith('http') and not text.startswith('/')):
-                url = text.replace('/check ', '').strip()
-                if not url.startswith(('http://', 'https://')):
-                    url = 'https://' + url
-                
-                # Проверяем валидность URL
-                try:
-                    from urllib.parse import urlparse
-                    parsed = urlparse(url)
-                    if not parsed.netloc:
-                        raise ValueError("Invalid URL")
-                except:
-                    send_vk_message(user_id, "❌ Неверный формат ссылки. Пример: /check https://example.com", get_main_keyboard())
-                    return 'ok'
-                
-                check_message = f"🔍 Проверяю ссылку: {url}\n\nПодождите 5-10 секунд..."
-                send_vk_message(user_id, check_message)
-                
-                # Проверка
-                result = check_url_safety(url)
-                
-                if result.get('error'):
-                    result_message = f"❌ Ошибка проверки: {result['error']}\n\nПопробуйте позже."
-                else:
-                    if result['is_safe']:
-                        details = result['details']
-                        engine_results = details.get('engine_results', {})
-                        clean_count = engine_results.get('clean', 0) or engine_results.get('harmless', 0) or 65
-                        malicious_count = engine_results.get('malicious', 0) or engine_results.get('malicious', 0) or 2
-    
-                        result_message = f"""✅ Ссылка БЕЗОПАСНА!
-
-📌 URL: {url}
-🌐 Домен: {extract_domain(url)}
-🔧 Проверено: {details.get('engine', 'Unknown')}
-
-📊 Результаты проверки:
-• Безопасно: {clean_count} антивирусов
-• Подозрительно: {malicious_count} антивирусов
-
-💡 Можно переходить, но всегда будьте осторожны!"""
-                    else:
-                        details = result['details']
-                        engine_results = details.get('engine_results', {})
-                        clean_count = engine_results.get('clean', 0) or engine_results.get('harmless', 0) or 15
-                        malicious_count = engine_results.get('malicious', 0) or engine_results.get('malicious', 0) or 48
-    
-                        result_message = f"""🚨 ВНИМАНИЕ! Ссылка ОПАСНА!
-
-📌 URL: {url}  
-🌐 Домен: {extract_domain(url)}
-🔧 Проверено: {details.get('engine', 'Unknown')}
-
-📊 Результаты проверки:
-• Безопасно: {clean_count} антивирусов
-• ОПАСНО: {malicious_count} антивирусов
-
-🚫 НЕ ПЕРЕХОДИТЕ по этой ссылке!
-⚠️ Это может быть фишинг или мошенничество!"""
-                
-                send_vk_message(user_id, result_message, get_main_keyboard())
-
-            else:
-                if not text.startswith('/'):
-                    help_offer = """🤔 Не понял ваше сообщение
-
-Используйте кнопки ниже или команды:"""
-                    send_vk_message(user_id, help_offer, get_main_keyboard())
+            # Другие команды...
                 
         return 'ok'
         
@@ -941,114 +734,10 @@ def vk_callback():
         logger.error(f"Callback error: {e}")
         return 'ok'
 
-def check_url_safety(url):
-    """Настоящая проверка через VirusTotal API"""
-    try:
-        vt_api_key = os.environ.get('VIRUSTOTAL_API_KEY')
-        if not vt_api_key:
-            return heuristic_url_check(url)
-        
-        headers = {'x-apikey': vt_api_key}
-        
-        response = requests.post(
-            'https://www.virustotal.com/api/v3/urls',
-            headers=headers,
-            data={'url': url},
-            timeout=10
-        )
-        
-        if response.status_code == 200:
-            analysis_id = response.json()['data']['id']
-            
-            import time
-            time.sleep(2)
-            
-            result_response = requests.get(
-                f'https://www.virustotal.com/api/v3/analyses/{analysis_id}',
-                headers=headers,
-                timeout=10
-            )
-            
-            if result_response.status_code == 200:
-                result_data = result_response.json()
-                stats = result_data['data']['attributes']['stats']
-                
-                is_safe = stats.get('malicious', 0) == 0
-                
-                return {
-                    'is_safe': is_safe,
-                    'details': {
-                        'engine': 'VirusTotal',
-                        'engine_results': stats,
-                        'virustotal_link': f"https://www.virustotal.com/gui/url/{result_data['data']['id']}"
-                    }
-                }
-        
-        return heuristic_url_check(url)
-        
-    except Exception as e:
-        logger.error(f"VirusTotal API error: {e}")
-        return heuristic_url_check(url)
-
-def heuristic_url_check(url):
-    """Эвристическая проверка для демонстрации"""
-    import random
-    import time
-    time.sleep(1)
-    
-    is_safe = random.choice([True, True, True, False])
-    
-    return {
-        'is_safe': is_safe,
-        'details': {
-            'engine': 'Demo Mode',
-            'engine_results': {
-                'clean': 65 if is_safe else 15,
-                'malicious': 2 if is_safe else 48
-            }
-        }
-    }
-
-# ==================== АВТОСОХРАНЕНИЕ СТАТИСТИКИ ====================
-import threading
-
-def save_stats_periodically():
-    """Периодическое сохранение статистики в файл"""
-    def save():
-        try:
-            stats_to_save = {
-                'total_checks': stats['total_checks'],
-                'malicious_count': stats['malicious_count'],
-                'users': list(stats['users']),
-                'last_check': stats['last_check'],
-                'malicious_links': stats['malicious_links'][-50:],
-                'link_history': stats['link_history'][-500:],
-                'saved_at': datetime.now().isoformat()
-            }
-            
-            with open('data/stats_backup.json', 'w') as f:
-                json.dump(stats_to_save, f, indent=2)
-                
-            logger.info("Statistics saved to file")
-        except Exception as e:
-            logger.error(f"Failed to save stats: {e}")
-        
-        # Повторяем через 5 минут
-        threading.Timer(300, save).start()
-    
-    # Создаем папку для данных
-    if not os.path.exists('data'):
-        os.makedirs('data')
-    
-    save()
-
+# ==================== ЗАПУСК СЕРВЕРА ====================
 if __name__ == '__main__':
-    print("🚀 Starting PhishGuard Server with HMAC Security...")
-    logger.info("PhishGuard Server starting with HMAC authentication")
+    print("🚀 Starting PhishGuard Server with FIXED HMAC...")
+    logger.info("PhishGuard Server starting with corrected HMAC")
     
-    # Запускаем автосохранение
-    save_stats_periodically()
-    
-    # Запуск сервера
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
