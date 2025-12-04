@@ -63,11 +63,16 @@ def check_origin_allowed(origin):
         return False
 
 # НАСТРОЙКА CORS ДЛЯ ПРОДАКШЕНА
-CORS(
-    app,
-    origins=check_origin_allowed,  # Динамическая проверка
-    methods=["GET", "POST", "OPTIONS"],
-    allow_headers=[
+CORS(app, resources={r"/*": {
+    "origins": [
+        "https://vk.com",
+        "https://vk.ru", 
+        "https://phishguard-server-production.up.railway.app",
+        "http://localhost:*",
+        "http://127.0.0.1:*"
+    ],
+    "methods": ["GET", "POST", "OPTIONS"],
+    "allow_headers": [
         "Content-Type", 
         "Authorization", 
         "X-Secret-Key", 
@@ -76,29 +81,24 @@ CORS(
         "X-Requested-With",
         "Accept"
     ],
-    expose_headers=[
+    "expose_headers": [
         "Content-Type", 
         "X-RateLimit-Limit", 
         "X-RateLimit-Remaining",
         "X-RateLimit-Reset"
     ],
-    supports_credentials=False,
-    max_age=600,
-    vary_header=True
-)
+    "supports_credentials": False,
+    "max_age": 600
+}})
 
 # ==================== SECURITY HEADERS MIDDLEWARE ====================
 @app.after_request
 def add_security_headers(response):
     """Добавляет security headers для продакшена"""
-    
-    # Security headers
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['X-XSS-Protection'] = '1; mode=block'
-    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
-    response.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
     
     # Cache headers для API
     if request.path.startswith('/api/'):
@@ -326,15 +326,12 @@ def home():
 
 @app.route('/health')
 def health():
-    """Health check endpoint"""
-    services = {
-        'server': 'healthy',
-        'vk_api': 'unknown',
-        'virustotal': 'unknown',
-        'hmac_enabled': True,
-        'rate_limiting': True,
-        'timestamp': datetime.now().isoformat()
-    }
+    """Простой health check endpoint"""
+    return jsonify({
+        "status": "healthy",
+        "server": "PhishGuard",
+        "timestamp": datetime.now().isoformat()
+    }), 200
     
     # Проверяем VK API (с токеном)
     try:
