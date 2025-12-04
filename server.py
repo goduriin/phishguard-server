@@ -537,43 +537,64 @@ def handle_link_report():
     """Принимает отчеты о ссылках (с HMAC)"""
     try:
         data = request.json
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+            
         logger.info(f"Received HMAC-protected link report from user {data.get('user_id', 'unknown')}")
         
         # Обновляем статистику
-        stats['total_checks'] += 1
-        if data.get('user_id'):
-            stats['users'].add(data.get('user_id'))
-        stats['last_check'] = datetime.now().isoformat()
+        with stats_lock:  # Используем блокировку для потокобезопасности
+            stats['total_checks'] += 1
+            if data.get('user_id'):
+                stats['users'].add(data.get('user_id'))
+            stats['last_check'] = datetime.now().isoformat()
+            
+            # Сохраняем в историю
+            link_data = {
+                'url': data.get('original_url'),
+                'final_url': data.get('final_url'),
+                'domain': extract_domain(data.get('final_url', data.get('original_url'))),
+                'timestamp': datetime.now().isoformat(),
+                'source': data.get('source', 'unknown'),
+                'user_id': data.get('user_id'),
+                'is_malicious': data.get('is_malicious', False),
+                'is_vk_redirect': data.get('is_vk_redirect', False),
+                'is_external': data.get('is_external', False),
+                'report_type': data.get('report_type', 'all_links')
+            }
+            
+            stats['link_history'].append(link_data)
+            
+            if len(stats['link_history']) > 500:
+                stats['link_history'] = stats['link_history'][-500:]
         
-        # Сохраняем в историю
-        link_data = {
-            'url': data.get('original_url'),
-            'final_url': data.get('final_url'),
-            'domain': extract_domain(data.get('final_url', data.get('original_url'))),
-            'timestamp': datetime.now().isoformat(),
-            'source': data.get('source', 'unknown'),
-            'user_id': data.get('user_id'),
-            'is_malicious': data.get('is_malicious', False),
-            'is_vk_redirect': data.get('is_vk_redirect', False),
-            'is_external': data.get('is_external', False),
-            'report_type': data.get('report_type', 'all_links')
-        }
-        
-        stats['link_history'].append(link_data)
-        
-        if len(stats['link_history']) > 500:
-            stats['link_history'] = stats['link_history'][-500:]
+        # Получаем данные для проверки дубликатов
+        is_malicious = link_data['is_malicious']
+        domain = link_data['domain']
         
         # Логируем тип ссылки
-        domain = link_data['domain']
         if link_data.get('is_vk_redirect'):
             link_type = "VK маскированная"
-        elif 'vk.com' in domain or 'vk.' in domain:
+        elif domain and ('vk.com' in domain or 'vk.' in domain):
             link_type = "VK внутренняя"
         else:
             link_type = "Внешняя"
             
         logger.info(f"Saved {link_type} link: {domain}")
+        
+        # ПРОСТАЯ ПРОВЕРКА ДУБЛИКАТОВ (опционально)
+        if is_malicious:
+            # Ищем похожие фишинговые ссылки за последний час
+            one_hour_ago = datetime.now().timestamp() - 3600
+            with stats_lock:
+                recent_phishing = [
+                    link for link in stats['link_history'][-50:]
+                    if link.get('is_malicious') 
+                    and datetime.fromisoformat(link['timestamp'].replace('Z', '+00:00')).timestamp() > one_hour_ago
+                ]
+            
+            if len(recent_phishing) > 10:  # Если много фишинга за час
+                logger.info(f"⚠️ Много фишинга: {len(recent_phishing)} за час")
         
         return jsonify({
             "status": "success", 
