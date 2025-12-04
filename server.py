@@ -13,6 +13,7 @@ from logging.handlers import RotatingFileHandler
 from collections import defaultdict
 from threading import Lock
 from werkzeug.middleware.proxy_fix import ProxyFix
+from urllib.parse import urlparse, urljoin
 
 app = Flask(__name__)
 
@@ -110,6 +111,8 @@ stats = {
     'malicious_links': [],
     'link_history': []
 }
+
+stats_lock = Lock() 
 
 # ==================== HMAC ФУНКЦИИ (ИСПРАВЛЕННЫЕ) ====================
 def deep_sort_dict(obj):
