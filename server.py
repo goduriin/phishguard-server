@@ -667,7 +667,7 @@ def get_main_keyboard():
         ]
     }
  
- def send_vk_message(user_id, message, keyboard=None):
+def send_vk_message(user_id, message, keyboard=None):
     """Отправляет сообщение через VK API (продакшен версия)"""
     try:
         logger.info(f"📨 Отправка сообщения пользователю {user_id}")
