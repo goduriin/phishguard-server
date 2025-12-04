@@ -8,28 +8,140 @@ import hmac
 import hashlib
 import time
 from functools import wraps
+import logging
+from logging.handlers import RotatingFileHandler
+from collections import defaultdict
+from threading import Lock
+from werkzeug.middleware.proxy_fix import ProxyFix
+import random
+import threading
+from urllib.parse import urlparse
 
 app = Flask(__name__)
 
-# ==================== CORS CONFIGURATION ====================
-# Разрешенные домены для продакшена
-ALLOWED_ORIGINS = [
-    "https://vk.com",
-    "https://*.vk.com", 
-    "https://vk.ru",
-    "https://*.vk.ru",
-    "http://localhost:*",      # Для локальной разработки
-    "https://localhost:*",     # Для локальной разработки с SSL
-]
+# ==================== ПРОДАКШЕН CORS КОНФИГУРАЦИЯ ====================
 
-# Настройка CORS
-CORS(app, 
-     origins=ALLOWED_ORIGINS,
-     methods=["GET", "POST", "OPTIONS"],
-     allow_headers=["Content-Type", "X-Secret-Key", "X-Signature", "X-Timestamp"],
-     expose_headers=["Content-Type", "X-RateLimit-Limit", "X-RateLimit-Remaining"],
-     supports_credentials=False,  # Важно для безопасности
-     max_age=600)
+# Фикс для Railway/nginx прокси
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+
+def check_origin_allowed(origin):
+    """Проверяет разрешен ли origin для CORS (продакшен версия)"""
+    
+    # Разрешенные домены для продакшена
+    ALLOWED_DOMAINS = [
+        "vk.com",
+        "vk.ru",
+        "phishguard-server-production.up.railway.app",
+        "localhost",
+        "127.0.0.1",
+    ]
+    
+    if not origin:
+        return True  # Разрешаем запросы без Origin (не CORS)
+    
+    try:
+        # Извлекаем домен из origin
+        from urllib.parse import urlparse
+        parsed = urlparse(origin)
+        domain = parsed.netloc
+        
+        # Убираем порт если есть
+        if ':' in domain:
+            domain = domain.split(':')[0]
+        
+        # Проверяем точное совпадение или поддомены vk
+        if domain in ALLOWED_DOMAINS:
+            return True
+        
+        # Разрешаем все поддомены vk.com и vk.ru
+        if domain.endswith('.vk.com') or domain.endswith('.vk.ru'):
+            return True
+            
+        return False
+        
+    except Exception:
+        return False
+
+# НАСТРОЙКА CORS ДЛЯ ПРОДАКШЕНА
+CORS(
+    app,
+    origins=check_origin_allowed,  # Динамическая проверка
+    methods=["GET", "POST", "OPTIONS"],
+    allow_headers=[
+        "Content-Type", 
+        "Authorization", 
+        "X-Secret-Key", 
+        "X-Signature", 
+        "X-Timestamp",
+        "X-Requested-With",
+        "Accept"
+    ],
+    expose_headers=[
+        "Content-Type", 
+        "X-RateLimit-Limit", 
+        "X-RateLimit-Remaining",
+        "X-RateLimit-Reset"
+    ],
+    supports_credentials=False,
+    max_age=600,
+    vary_header=True
+)
+
+# ==================== SECURITY HEADERS MIDDLEWARE ====================
+@app.after_request
+def add_security_headers(response):
+    """Добавляет security headers для продакшена"""
+    
+    # Security headers
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
+    
+    # Cache headers для API
+    if request.path.startswith('/api/'):
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+    
+    return response
+
+# ==================== CORS PROTECTION DECORATOR ====================
+def cors_protected(f):
+    """Декоратор для дополнительной защиты CORS"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Для OPTIONS запросов - пропускаем (уже обработано Flask-CORS)
+        if request.method == 'OPTIONS':
+            return f(*args, **kwargs)
+            
+        try:
+            # Проверяем origin для POST/GET запросов
+            origin = request.headers.get('Origin')
+            
+            # Если есть Origin - проверяем
+            if origin and not check_origin_allowed(origin):
+                # Используем print пока logger не инициализирован
+                print(f"⚠️ Blocked CORS request from unauthorized origin: {origin}")
+                return jsonify({
+                    "error": "CORS policy violation",
+                    "message": "Origin not allowed",
+                    "allowed_origins": [
+                        "vk.com",
+                        "vk.ru", 
+                        "phishguard-server-production.up.railway.app"
+                    ]
+                }), 403
+            
+            # Выполняем основной код
+            return f(*args, **kwargs)
+        except Exception as e:
+            print(f"❌ CORS protection error: {e}")
+            return jsonify({"error": "CORS check failed"}), 500
+    
+    return decorated_function
 
 # ==================== КОНФИГУРАЦИЯ HMAC ====================
 # Конфигурация из переменных окружения
@@ -51,7 +163,10 @@ stats = {
 # ==================== HMAC ФУНКЦИИ ====================
 def generate_hmac_signature(data, timestamp):
     """Генерирует HMAC подпись для данных"""
-    message = f"{timestamp}{json.dumps(data, sort_keys=True, separators=(',', ':'))}"
+    # Сортируем ключи так же как на клиенте
+    sorted_data = json.dumps(data, sort_keys=True, separators=(',', ':'))
+    message = f"{timestamp}{sorted_data}{HMAC_SECRET_KEY}"
+    
     signature = hmac.new(
         HMAC_SECRET_KEY.encode('utf-8'),
         message.encode('utf-8'),
@@ -60,24 +175,34 @@ def generate_hmac_signature(data, timestamp):
     return signature.hexdigest()
 
 def verify_hmac_signature(data, signature, timestamp, max_age=300):
-    """Проверяет HMAC подпись"""
+    """Проверяет HMAC подпись - ДЛЯ ПРОДАКШЕНА"""
     try:
-        # 1. Проверка свежести запроса (не старше 5 минут)
-        current_time = time.time()
-        request_time = float(timestamp) / 1000 if len(timestamp) > 10 else float(timestamp)
-        
-        if abs(current_time - request_time) > max_age:
-            print(f"⚠️ Устаревший HMAC запрос: {abs(current_time - request_time):.1f}с разницы")
+        # 1. Проверяем наличие обязательных полей
+        if not signature or not timestamp:
             return False
-        
-        # 2. Генерация ожидаемой подписи
+            
+        # 2. Проверяем формат timestamp (может быть в секундах или миллисекундах)
+        try:
+            ts = float(timestamp)
+            if ts > 1000000000000:  # Если это миллисекунды
+                ts = ts / 1000
+        except ValueError:
+            return False
+            
+        # 3. Проверяем свежесть запроса (не старше 5 минут)
+        current_time = time.time()
+        if abs(current_time - ts) > max_age:
+            print(f"⚠️ Устаревший запрос: {abs(current_time - ts):.1f}с разницы")
+            return False
+            
+        # 4. Генерируем ожидаемую подпись
         expected_signature = generate_hmac_signature(data, timestamp)
         
-        # 3. Безопасное сравнение
+        # 5. Безопасное сравнение
         return hmac.compare_digest(signature, expected_signature)
         
     except Exception as e:
-        print(f"❌ Ошибка проверки HMAC: {e}")
+        print(f"❌ HMAC verification error: {e}")
         return False
 
 def hmac_required(f):
@@ -224,6 +349,7 @@ logger = setup_logging()
 
 # ==================== ENDPOINTS ====================
 @app.route('/')
+@cors_protected
 def home():
     return jsonify({
         "status": "PhishGuard Server is running!",
@@ -233,6 +359,7 @@ def home():
     })
 
 @app.route('/health')
+@cors_protected
 def health():
     """Health check endpoint"""
     services = {
@@ -244,31 +371,49 @@ def health():
         'timestamp': datetime.now().isoformat()
     }
     
-    # Проверяем VK API
+    # Проверяем VK API (с токеном)
     try:
-        response = requests.get(
-            'https://api.vk.com/method/users.get',
-            params={'user_ids': '1', 'v': '5.199'},
-            timeout=3
-        )
-        services['vk_api'] = 'healthy' if response.status_code == 200 else 'unhealthy'
-    except:
-        services['vk_api'] = 'unhealthy'
+        if VK_TOKEN:
+            response = requests.get(
+                'https://api.vk.com/method/users.get',
+                params={
+                    'user_ids': '1', 
+                    'v': '5.199',
+                    'access_token': VK_TOKEN  # ← ВАЖНО!
+                },
+                timeout=3
+            )
+            services['vk_api'] = 'healthy' if response.status_code == 200 else f'unhealthy: {response.status_code}'
+        else:
+            services['vk_api'] = 'no_token'
+    except Exception as e:
+        services['vk_api'] = f'error: {str(e)[:50]}'
     
     # Проверяем VirusTotal API
     try:
-        response = requests.get(
-            'https://www.virustotal.com/api/v3/ping',
-            headers={'x-apikey': VIRUSTOTAL_API_KEY} if VIRUSTOTAL_API_KEY else {},
-            timeout=3
-        )
-        services['virustotal'] = 'healthy' if response.status_code == 200 else 'unhealthy'
-    except:
-        services['virustotal'] = 'unhealthy'
+        if VIRUSTOTAL_API_KEY:
+            response = requests.get(
+                'https://www.virustotal.com/api/v3/ping',
+                headers={'x-apikey': VIRUSTOTAL_API_KEY},
+                timeout=3
+            )
+            if response.status_code == 200:
+                data = response.json()
+                services['virustotal'] = {
+                    'status': 'healthy',
+                    'credits': data.get('data', {}).get('credits', 'N/A')
+                }
+            else:
+                services['virustotal'] = f'unhealthy: {response.status_code}'
+        else:
+            services['virustotal'] = 'no_key'
+    except Exception as e:
+        services['virustotal'] = f'error: {str(e)[:50]}'
     
     return jsonify(services)
 
 @app.route('/api/hmac-test', methods=['POST'])
+@cors_protected
 def hmac_test():
     """Тестовый endpoint для проверки HMAC"""
     try:
@@ -299,6 +444,7 @@ def options_check_result():
 @app.route('/api/check-result', methods=['POST'])
 @hmac_required
 @rate_limit
+@cors_protected
 def handle_check_result():
     """Принимает результаты проверки от расширения (с HMAC)"""
     try:
@@ -391,6 +537,7 @@ def options_report_link():
 @app.route('/api/report-link', methods=['POST'])
 @hmac_required
 @rate_limit
+@cors_protected
 def handle_link_report():
     """Принимает отчеты о ссылках (с HMAC)"""
     try:
@@ -540,6 +687,7 @@ def send_vk_message(user_id, message, keyboard=None):
 
 @app.route('/vk-callback', methods=['POST'])
 @rate_limit
+@cors_protected
 def vk_callback():
     """Обработчик Callback API для VK"""
     try:
