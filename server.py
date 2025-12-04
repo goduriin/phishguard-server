@@ -126,144 +126,123 @@ stats = {
 }
 
 # ==================== HMAC ФУНКЦИИ ====================
+  
 def generate_hmac_signature(data, timestamp):
-    """Генерирует HMAC подпись ТОЧНО как в клиенте"""
+    """Генерирует HMAC подпись (совместимо с клиентом)"""
     try:
-        import json
-        import hmac
-        import hashlib
-        
-        print(f"🔍 SERVER HMAC GENERATION:")
-        print(f"  Timestamp: {timestamp}")
-        print(f"  Data type: {type(data)}")
-        
-        # КРИТИЧЕСКИ ВАЖНО: ТОЧНО как в клиенте!
-        # Клиент: JSON.stringify(data, Object.keys(data).sort())
-        # Это ЭКВИВАЛЕНТНО: json.dumps(data, sort_keys=True)
-        # НО: нужно проверить одинаковую сортировку
-        
-        if not isinstance(data, dict):
-            # Если не dict (маловероятно)
-            data_str = json.dumps(data)
-        else:
-            # 1. Сортируем ключи как в клиенте (алфавитно)
-            sorted_keys = sorted(data.keys())
-            print(f"  Sorted keys: {sorted_keys}")
+        if not data or not timestamp:
+            return None
             
-            # 2. Создаем JSON с отсортированными ключами
-            # Это ТОЧНО то же самое что делает клиент
-            data_str = json.dumps(data, sort_keys=True)
+        # 1. Конвертируем timestamp в строку
+        timestamp_str = str(timestamp)
         
-        print(f"  Data JSON (first 200): {data_str[:200]}...")
+        # 2. Сортируем ключи данных (ТОЧНО как на клиенте)
+        if isinstance(data, dict):
+            # Создаем отсортированный словарь
+            sorted_keys = sorted(data.keys())
+            sorted_data = {}
+            for key in sorted_keys:
+                sorted_data[key] = data[key]
+            
+            # JSON с отсортированными ключами
+            data_str = json.dumps(sorted_data, separators=(',', ':'))
+        else:
+            data_str = json.dumps(data)
         
-        # 3. Сообщение ТОЧНО как в клиенте: timestamp + dataStr + secret
-        # timestamp - строка (Date.now().toString())
-        message = str(timestamp) + data_str + HMAC_SECRET_KEY
-        print(f"  Message (first 200): {message[:200]}...")
+        # 3. Создаем сообщение (ТОЧНО как на клиенте)
+        message = timestamp_str + data_str + HMAC_SECRET_KEY
         
-        # 4. Генерация HMAC-SHA256
+        # 4. Генерируем HMAC-SHA256
         signature = hmac.new(
             HMAC_SECRET_KEY.encode('utf-8'),
             message.encode('utf-8'),
             hashlib.sha256
         ).hexdigest()
         
-        print(f"  Generated signature: {signature[:50]}...")
         return signature
         
     except Exception as e:
-        print(f"❌ SERVER HMAC generation error: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"❌ HMAC generation error: {e}")
         return None
 
-# В функции verify_hmac_signature добавьте подробную отладку:
-
 def verify_hmac_signature(data, signature, timestamp, max_age=300):
-    """Проверяет HMAC подпись с подробной отладкой"""
+    """Проверяет HMAC подпись"""
     try:
-        print(f"\n=== HMAC VERIFICATION ===")
-        print(f"  Path: {request.path if hasattr(request, 'path') else 'unknown'}")
-        print(f"  Timestamp: {timestamp}")
-        
-        if data and isinstance(data, dict):
-            print(f"  Data keys ({len(data)}): {list(data.keys())}")
-            # Преобразуем timestamp к строке для consistency с клиентом
-            if 'timestamp' in data and not isinstance(data['timestamp'], str):
-                data['timestamp'] = str(data['timestamp'])
-        
-        print(f"  Received signature: {signature[:50]}..." if signature else "  No signature!")
-        
         # 1. Базовые проверки
         if not signature or not timestamp:
-            print("❌ Missing signature or timestamp")
             return False
         
         # 2. Проверяем timestamp
         try:
             ts = float(timestamp)
-            # Если timestamp в миллисекундах (> 1e12), конвертируем в секунды
-            if ts > 1000000000000:
+            # Если timestamp в миллисекундах, конвертируем в секунды
+            if ts > 1000000000000:  # Больше 2001 года в миллисекундах
                 ts_seconds = ts / 1000.0
-                print(f"  Timestamp in ms: {ts} -> seconds: {ts_seconds}")
             else:
                 ts_seconds = ts
-                print(f"  Timestamp in seconds: {ts}")
         except ValueError:
-            print("❌ Invalid timestamp format")
             return False
         
         # 3. Проверяем свежесть (5 минут)
         current_time = time.time()
-        time_diff = abs(current_time - ts_seconds)
-        print(f"  Current server time: {current_time}")
-        print(f"  Time difference: {time_diff:.1f} seconds")
-        
-        if time_diff > max_age:
-            print(f"❌ Request too old: {time_diff:.1f}s > {max_age}s")
+        if abs(current_time - ts_seconds) > max_age:
             return False
         
         # 4. Генерируем ожидаемую подпись
         expected = generate_hmac_signature(data, timestamp)
         
         if not expected:
-            print("❌ Failed to generate expected signature")
             return False
         
-        print(f"  Expected signature: {expected[:50]}...")
-        
-        # 5. Сравниваем
-        match = signature == expected
-        print(f"  Signatures match: {match}")
-        
-        if not match:
-            print("🔍 DEBUG: Checking what's different...")
-            print(f"  Signature length: {len(signature)}")
-            print(f"  Expected length: {len(expected)}")
-            
-            # Поиск различий
-            for i in range(min(len(signature), len(expected))):
-                if signature[i] != expected[i]:
-                    print(f"  First diff at position {i}: '{signature[i]}' != '{expected[i]}'")
-                    print(f"  Signature chunk: {signature[i:i+20]}")
-                    print(f"  Expected chunk: {expected[i:i+20]}")
-                    break
-        
+        # 5. Сравниваем подписи
         return hmac.compare_digest(signature, expected)
         
     except Exception as e:
         print(f"❌ HMAC verification error: {e}")
-        import traceback
-        traceback.print_exc()
         return False
 
-# Добавьте специальный endpoint для отладки HMAC:
-# ==================== DEBUG HMAC ENDPOINT ====================
+def hmac_required(f):
+    """Декоратор для проверки HMAC"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Пропускаем OPTIONS запросы (CORS)
+        if request.method == 'OPTIONS':
+            return f(*args, **kwargs)
+            
+        # Пропускаем health check
+        if request.path in ['/health', '/']:
+            return f(*args, **kwargs)
+            
+        try:
+            # Получаем заголовки
+            signature = request.headers.get('X-Signature')
+            timestamp = request.headers.get('X-Timestamp')
+            
+            # Если нет HMAC заголовков, проверяем старый способ
+            if not signature or not timestamp:
+                client_secret = request.headers.get('X-Secret-Key')
+                if client_secret and client_secret == SECRET_KEY:
+                    print("⚠️ Using legacy authentication")
+                    return f(*args, **kwargs)
+                return jsonify({"error": "HMAC signature required"}), 401
+            
+            # Проверяем HMAC
+            if not verify_hmac_signature(request.json, signature, timestamp):
+                return jsonify({"error": "Invalid HMAC signature"}), 401
+            
+            return f(*args, **kwargs)
+            
+        except Exception as e:
+            print(f"❌ HMAC middleware error: {e}")
+            return jsonify({"error": "Authentication error"}), 401
+    
+    return decorated_function
+
+# ==================== DEBUG ENDPOINT ====================
 @app.route('/api/debug-hmac', methods=['POST', 'OPTIONS'])
 def debug_hmac():
     """Endpoint для отладки HMAC"""
     try:
-        # Для OPTIONS запросов (CORS)
         if request.method == 'OPTIONS':
             return jsonify({"status": "ok"}), 200
             
@@ -271,73 +250,37 @@ def debug_hmac():
         signature = request.headers.get('X-Signature')
         timestamp = request.headers.get('X-Timestamp')
         
-        print(f"\n=== HMAC DEBUG ENDPOINT ===")
-        print(f"Data: {data}")
-        print(f"Signature: {signature[:50] if signature else 'None'}...")
-        print(f"Timestamp: {timestamp}")
-        
         # Генерируем подпись на сервере
         server_signature = generate_hmac_signature(data, timestamp)
         
         return jsonify({
+            "match": signature == server_signature,
             "client_signature": signature,
             "server_signature": server_signature,
-            "match": signature == server_signature,
             "timestamp": timestamp,
-            "server_time": time.time(),
-            "debug_info": {
+            "debug": {
                 "data_keys": list(data.keys()) if data else [],
                 "timestamp_type": type(timestamp).__name__,
-                "server_time": time.time(),
-                "message_format": f"{timestamp}{json.dumps(data, sort_keys=True)}{HMAC_SECRET_KEY[:10]}..."
+                "hmac_secret_length": len(HMAC_SECRET_KEY)
             }
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    
-def hmac_required(f):
-    """Декоратор для проверки HMAC"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        # Пропускаем OPTIONS запросы (для CORS)
-        if request.method == 'OPTIONS':
-            return f(*args, **kwargs)
-            
-        # Пропускаем health check и корневой маршрут
-        if request.path in ['/health', '/']:
-            return f(*args, **kwargs)
-            
-        try:
-            # Получаем подпись и timestamp из заголовков
-            signature = request.headers.get('X-Signature')
-            timestamp = request.headers.get('X-Timestamp')
-            
-            print(f"🔍 Проверяю HMAC для {request.path}: signature={signature[:20] if signature else 'None'}..., timestamp={timestamp}")
-            
-            # Если нет HMAC заголовков, проверяем старый способ (для обратной совместимости)
-            if not signature or not timestamp:
-                print("⚠️ Нет HMAC заголовков, проверяю старый способ аутентификации")
-                client_secret = request.headers.get('X-Secret-Key')
-                if client_secret and client_secret == SECRET_KEY:
-                    print("✅ Старая аутентификация прошла успешно")
-                    return f(*args, **kwargs)
-                else:
-                    print("❌ Неверный старый секретный ключ")
-                    return jsonify({"error": "HMAC signature required or invalid old key"}), 401
-            
-            # Проверяем HMAC
-            if not verify_hmac_signature(request.json, signature, timestamp):
-                print(f"❌ Неверная HMAC подпись для {request.path}")
-                return jsonify({"error": "Invalid HMAC signature"}), 401
-            
-            print(f"✅ HMAC подпись верна для {request.path}")
-            return f(*args, **kwargs)
-            
-        except Exception as e:
-            print(f"❌ Ошибка в HMAC middleware: {e}")
-            return jsonify({"error": "Authentication error"}), 401
-    
-    return decorated_function
+
+# Обновите все защищенные endpoints с @hmac_required
+@app.route('/api/hmac-test', methods=['POST'])
+@hmac_required
+def hmac_test():
+    """Тестовый endpoint для проверки HMAC"""
+    try:
+        return jsonify({
+            "status": "success",
+            "message": "HMAC verification successful",
+            "timestamp": request.headers.get('X-Timestamp'),
+            "hmac_verified": True
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # ==================== RATE LIMITING ====================
 from collections import defaultdict
