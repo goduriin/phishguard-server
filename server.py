@@ -620,37 +620,39 @@ def extract_domain(url):
 
 # Клавиатуры для бота
 def get_main_keyboard():
+    """Клавиатура для VK бота (исправленная версия)"""
     return {
         "one_time": False,
+        "inline": False,  # Важно: обычная клавиатура, не inline
         "buttons": [
             [{
                 "action": {
                     "type": "text",
-                    "payload": "{\"command\":\"help\"}",
+                    "payload": json.dumps({"command": "help"}),
                     "label": "🛡️ Помощь"
                 },
                 "color": "primary"
             }],
             [{
                 "action": {
-                    "type": "text", 
-                    "payload": "{\"command\":\"stats\"}",
+                    "type": "text",
+                    "payload": json.dumps({"command": "stats"}),
                     "label": "📊 Статистика"
                 },
                 "color": "positive"
             }],
             [{
                 "action": {
-                    "type": "text", 
-                    "payload": "{\"command\":\"all_links\"}",
+                    "type": "text",
+                    "payload": json.dumps({"command": "all_links"}),
                     "label": "🔗 Все ссылки"
                 },
                 "color": "primary"
             }],
             [{
                 "action": {
-                    "type": "text", 
-                    "payload": "{\"command\":\"malicious_links\"}",
+                    "type": "text",
+                    "payload": json.dumps({"command": "malicious_links"}),
                     "label": "🚫 Опасные ссылки"
                 },
                 "color": "negative"
@@ -658,7 +660,7 @@ def get_main_keyboard():
             [{
                 "action": {
                     "type": "text",
-                    "payload": "{\"command\":\"check\"}",
+                    "payload": json.dumps({"command": "check"}),
                     "label": "🔍 Проверить ссылку"
                 },
                 "color": "primary"
@@ -667,7 +669,7 @@ def get_main_keyboard():
     }
 
 def send_vk_message(user_id, message, keyboard=None):
-    """Отправляет сообщение через VK API"""
+    """Отправляет сообщение через VK API (исправленная версия)"""
     try:
         logger.info(f"Sending VK message to user {user_id}")
         
@@ -680,8 +682,10 @@ def send_vk_message(user_id, message, keyboard=None):
         }
         
         if keyboard:
+            # Сериализуем клавиатуру с ensure_ascii=False
             keyboard_json = json.dumps(keyboard, ensure_ascii=False)
             params['keyboard'] = keyboard_json
+            logger.info(f"Keyboard JSON: {keyboard_json[:100]}...")
         
         response = requests.post(
             'https://api.vk.com/method/messages.send',
@@ -690,10 +694,20 @@ def send_vk_message(user_id, message, keyboard=None):
         )
         
         result = response.json()
+        logger.info(f"VK API response: {result}")
         
         if 'error' in result:
             error = result['error']
             logger.error(f"VK API Error {error.get('error_code')}: {error.get('error_msg')}")
+            
+            # Проверяем распространённые ошибки
+            if error.get('error_code') == 901:
+                logger.error("❌ Can't send messages for users without permission")
+            elif error.get('error_code') == 902:
+                logger.error("❌ Can't send messages to this user due to their privacy settings")
+            elif error.get('error_code') == 7:
+                logger.error("❌ Permission denied. Check bot token and permissions")
+            
             return False
         return True
             
@@ -704,58 +718,120 @@ def send_vk_message(user_id, message, keyboard=None):
 @app.route('/vk-callback', methods=['POST'])
 @rate_limit
 def vk_callback():
-    """Обработчик Callback API для VK"""
+    """Обработчик Callback API для VK (исправленная версия)"""
     try:
         data = request.json
         logger.info(f"VK Callback received: {data.get('type', 'unknown')}")
         
+        # Подтверждение для Callback API
         if data['type'] == 'confirmation':
-            confirmation_code = os.environ.get('CONFIRMATION_CODE', '')
-            logger.info(f"Returning confirmation code")
+            confirmation_code = os.environ.get('VK_CONFIRMATION_CODE', '')
+            if not confirmation_code:
+                logger.error("❌ VK_CONFIRMATION_CODE not set in environment")
+                return 'confirmation_error'
+            logger.info(f"Returning confirmation code: {confirmation_code}")
             return confirmation_code
         
+        # Обработка новых сообщений
         if data['type'] == 'message_new':
             message = data['object']['message']
             user_id = message['from_id']
             text = message['text'].lower()
-            payload = message.get('payload', '{}')
             
-            # Обработка команд
+            logger.info(f"VK Bot: User {user_id} sent: '{text}'")
+            
+            # Проверяем payload для кнопок
+            payload = message.get('payload')
             if payload:
                 try:
                     payload_data = json.loads(payload)
                     command = payload_data.get('command', '')
                     if command:
-                        text = f'/{command}'
-                except:
-                    pass
+                        text = command
+                        logger.info(f"Button command detected: {command}")
+                except json.JSONDecodeError as e:
+                    logger.error(f"Invalid payload JSON: {payload}, error: {e}")
             
-            logger.info(f"VK Bot: Processing command: '{text}'")
-            
-            if text == '/start':
-                welcome_message = """👋 Привет! Я бот PhishGuard!"""
-                send_vk_message(user_id, welcome_message, get_main_keyboard())
+            # Обработка команд
+            if text in ['/start', 'start', 'начать']:
+                welcome_message = """👋 Привет! Я бот PhishGuard!
+
+🛡️ Я помогаю обнаруживать фишинговые ссылки в ВКонтакте.
+
+Нажмите кнопки ниже для управления:"""
+                success = send_vk_message(user_id, welcome_message, get_main_keyboard())
+                logger.info(f"Start command sent: {success}")
                 
-            elif text == '/help':
-                help_message = """🛡️ PhishGuard - защита от фишинга"""
+            elif text in ['help', '/help']:
+                help_message = """🛡️ **PhishGuard - защита от фишинга**
+
+**Как это работает:**
+1. Установите расширение в браузере
+2. Расширение автоматически проверяет ссылки в ВК
+3. При обнаружении фишинга вы получите уведомление
+
+**Команды:**
+• Статистика - просмотр статистики проверок
+• Все ссылки - история проверенных ссылок
+• Опасные ссылки - список обнаруженных угроз
+• Проверить ссылку - ручная проверка ссылки
+
+**Безопасность:** Все проверки защищены HMAC-шифрованием."""
                 send_vk_message(user_id, help_message, get_main_keyboard())
                 
-            elif text == '/stats':
+            elif text in ['stats', '/stats']:
                 formatted_time = stats['last_check'] if stats['last_check'] else 'еще не было'
-                stats_message = f"""📊 Статистика PhishGuard
+                stats_message = f"""📊 **Статистика PhishGuard**
 
-Всего проверок: {stats['total_checks']}
-Обнаружено угроз: {stats['malicious_count']}
-Уникальных пользователей: {len(stats['users'])}
-Последняя проверка: {formatted_time}"""
+✅ Всего проверок: {stats['total_checks']}
+🚫 Обнаружено угроз: {stats['malicious_count']}
+👥 Уникальных пользователей: {len(stats['users'])}
+⏰ Последняя проверка: {formatted_time}
+
+📈 Бот активно защищает пользователей ВК!"""
                 send_vk_message(user_id, stats_message, get_main_keyboard())
                 
-            # Другие команды...
+            elif text in ['all_links', 'links']:
+                if stats['link_history']:
+                    recent_links = stats['link_history'][-10:]  # Последние 10 ссылок
+                    links_message = "🔗 **Последние проверенные ссылки:**\n\n"
+                    for link in recent_links:
+                        status = "🚫 ФИШИНГ" if link.get('is_malicious') else "✅ Безопасно"
+                        links_message += f"{status}: {link.get('domain', 'unknown')}\n"
+                else:
+                    links_message = "📭 Пока нет проверенных ссылок."
+                send_vk_message(user_id, links_message, get_main_keyboard())
                 
+            elif text in ['malicious_links', 'danger']:
+                if stats['malicious_links']:
+                    malicious_message = "🚫 **Обнаруженные фишинговые ссылки:**\n\n"
+                    for link in stats['malicious_links'][-5:]:  # Последние 5 фишинговых
+                        malicious_message += f"• {link.get('domain', 'unknown')}\n"
+                else:
+                    malicious_message = "✅ Пока не обнаружено фишинговых ссылок!"
+                send_vk_message(user_id, malicious_message, get_main_keyboard())
+                
+            elif text in ['check', 'проверить']:
+                check_message = """🔍 **Проверить ссылку**
+
+Отправьте мне ссылку для проверки, например:
+`https://example.com`
+
+Или используйте расширение PhishGuard для автоматической проверки всех ссылок в ВК."""
+                send_vk_message(user_id, check_message, get_main_keyboard())
+                
+            else:
+                # Если просто текст (не команда), предлагаем помощь
+                if not payload:  # Если это не нажатие кнопки
+                    unknown_message = f"🤖 Я не понял команду '{text}'\n\nИспользуйте кнопки ниже или напишите /help для справки."
+                    send_vk_message(user_id, unknown_message, get_main_keyboard())
+        
         return 'ok'
         
     except Exception as e:
         logger.error(f"Callback error: {e}")
+        import traceback
+        traceback.print_exc()
         return 'ok'
 
 # ==================== ЗАПУСК СЕРВЕРА ====================
