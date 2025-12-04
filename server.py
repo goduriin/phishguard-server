@@ -333,9 +333,9 @@ class RateLimiter:
         self.lock = Lock()
         
         self.limits = {
-            '/api/check-result': {'limit': 20, 'window': 60},
-            '/api/report-link': {'limit': 50, 'window': 60},
-            '/vk-callback': {'limit': 100, 'window': 60},
+            '/api/check-result': {'limit': 100, 'window': 3600},
+            '/api/report-link': {'limit': 500, 'window': 3600},
+            '/vk-callback': {'limit': 1000, 'window': 3600},
         }
     
     def is_allowed(self, endpoint, ip_address):
