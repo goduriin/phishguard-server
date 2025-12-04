@@ -108,8 +108,6 @@ def add_security_headers(response):
     
     return response
 
-# ==================== CORS PROTECTION DECORATOR ====================
-
 # ==================== КОНФИГУРАЦИЯ HMAC ====================
 # Конфигурация из переменных окружения
 VK_TOKEN = os.environ.get('VK_TOKEN')
@@ -129,19 +127,94 @@ stats = {
 
 # ==================== HMAC ФУНКЦИИ ====================
 def generate_hmac_signature(data, timestamp):
-    """Генерирует HMAC подпись для данных"""
-    # Сортируем ключи так же как на клиенте
-    sorted_data = json.dumps(data, sort_keys=True, separators=(',', ':'))
-    message = f"{timestamp}{sorted_data}{HMAC_SECRET_KEY}"
-    
-    signature = hmac.new(
-        HMAC_SECRET_KEY.encode('utf-8'),
-        message.encode('utf-8'),
-        hashlib.sha256
-    )
-    return signature.hexdigest()
+    """Генерирует HMAC подпись ТОЧНО как в клиенте - ФИНАЛЬНЫЙ ФИКС"""
+    try:
+        import json
+        
+        # 1. ТОЧНО как в клиенте: JSON.stringify(data, Object.keys(data).sort())
+        if not isinstance(data, dict):
+            data_str = json.dumps(data, separators=(',', ':'))
+        else:
+            sorted_keys = sorted(data.keys())
+            filtered_dict = {}
+            for key in sorted_keys:
+                if key in data:
+                    filtered_dict[key] = data[key]
+            
+            data_str = json.dumps(filtered_dict, separators=(',', ':'))
+        
+        # 2. ТОЧНО как в клиенте: timestamp + dataStr + secret
+        message = str(timestamp) + data_str + HMAC_SECRET_KEY
+        
+        # 3. Отладочная информация
+        print(f"🔍 HMAC GENERATION:")
+        print(f"  Timestamp: {timestamp}")
+        print(f"  Data str (first 200): {data_str[:200]}...")
+        print(f"  Message (first 200): {message[:200]}...")
+        
+        # 4. Генерируем HMAC
+        signature = hmac.new(
+            HMAC_SECRET_KEY.encode('utf-8'),
+            message.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+        
+        print(f"  Generated signature: {signature[:50]}...")
+        return signature
+        
+    except Exception as e:
+        print(f"❌ HMAC generation error: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 def verify_hmac_signature(data, signature, timestamp, max_age=300):
+    """Проверяет HMAC подпись с отладкой"""
+    try:
+        print(f"\n=== HMAC VERIFICATION ===")
+        print(f"Timestamp: {timestamp}")
+        print(f"Data keys: {list(data.keys()) if isinstance(data, dict) else 'not dict'}")
+        print(f"Received signature: {signature[:50]}...")
+        
+        # 1. Проверяем наличие обязательных полей
+        if not signature or not timestamp:
+            print("❌ Missing signature or timestamp")
+            return False
+            
+        # 2. Проверяем формат timestamp (может быть в секундах или миллисекундах)
+        try:
+            ts = float(timestamp)
+            if ts > 1000000000000:  # Если это миллисекунды
+                ts = ts / 1000
+        except ValueError:
+            print("❌ Invalid timestamp format")
+            return False
+            
+        # 3. Проверяем свежесть запроса (не старше 5 минут)
+        current_time = time.time()
+        if abs(current_time - ts) > max_age:
+            print(f"⚠️ Устаревший запрос: {abs(current_time - ts):.1f}с разницы")
+            return False
+            
+        # 4. Генерируем ожидаемую подпись
+        expected = generate_hmac_signature(data, timestamp)
+        
+        if not expected:
+            print("❌ Failed to generate expected signature")
+            return False
+            
+        print(f"Expected signature: {expected[:50]}...")
+        print(f"Match: {signature == expected}")
+        
+        # 5. Безопасное сравнение
+        return hmac.compare_digest(signature, expected)
+        
+    except Exception as e:
+        print(f"❌ HMAC verification error: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
     """Проверяет HMAC подпись - ДЛЯ ПРОДАКШЕНА"""
     try:
         # 1. Проверяем наличие обязательных полей
