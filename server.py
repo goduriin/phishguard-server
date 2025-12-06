@@ -952,6 +952,89 @@ def debug_info():
             '/metrics'
         ]
     })
+
+# Добавьте где-то после других @app.route декораторов
+
+@app.route('/api/test-error', methods=['GET'])
+def test_error():
+    """Endpoint для тестирования ошибок (должен отправляться в Sentry)"""
+    try:
+        # Создаем тестовую ошибку
+        raise ValueError("Это тестовая ошибка для Sentry! Время: " + datetime.now().isoformat())
+        
+    except Exception as e:
+        # Логируем в Sentry если доступен
+        error_sent = False
+        error_message = str(e)
+        
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_exception(e)
+            error_sent = True
+            print(f"✅ Ошибка отправлена в Sentry: {error_message}")
+        except Exception as sentry_error:
+            print(f"⚠️ Не удалось отправить в Sentry: {sentry_error}")
+        
+        return jsonify({
+            'test': 'error_endpoint',
+            'error': error_message,
+            'sentry_enabled': error_sent,
+            'message': 'Тестовая ошибка создана' + (' и отправлена в Sentry' if error_sent else ' (Sentry не доступен)'),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+@app.route('/api/test-sentry', methods=['GET'])
+def test_sentry():
+    """Тестовый endpoint для проверки Sentry"""
+    
+    # Проверяем доступность Sentry
+    sentry_enabled = False
+    try:
+        import sentry_sdk
+        sentry_enabled = True
+    except ImportError:
+        sentry_enabled = False
+    
+    message_sent = False
+    if sentry_enabled:
+        try:
+            sentry_sdk.capture_message(
+                "Тестовое сообщение из /api/test-sentry. Время: " + datetime.now().isoformat(), 
+                level="info"
+            )
+            message_sent = True
+            print("✅ Тестовое сообщение отправлено в Sentry")
+        except Exception as e:
+            print(f"⚠️ Ошибка отправки сообщения в Sentry: {e}")
+    
+    return jsonify({
+        'status': 'success',
+        'message': 'Sentry test endpoint',
+        'sentry_enabled': sentry_enabled,
+        'test_message_sent': message_sent,
+        'server_time': datetime.now().isoformat(),
+        'environment': os.environ.get('ENV', 'not set')
+    })
+
+@app.route('/api/sentry-status', methods=['GET'])
+def sentry_status():
+    """Проверка статуса Sentry"""
+    try:
+        import sentry_sdk
+        dsn = os.environ.get('SENTRY_DSN', 'not set')
+        
+        return jsonify({
+            'sentry_configured': bool(dsn and dsn != 'not set'),
+            'dsn_prefix': dsn[:30] + '...' if dsn and len(dsn) > 30 else dsn,
+            'environment': os.environ.get('ENV', 'not set'),
+            'sentry_module_available': True,
+            'message': 'Sentry seems to be configured'
+        })
+    except ImportError:
+        return jsonify({
+            'sentry_configured': False,
+            'message': 'sentry-sdk not installed'
+        }), 500
 # ==================== ЗАПУСК СЕРВЕРА ====================
 if __name__ == '__main__':
     print("🚀 Starting PhishGuard Server with FIXED HMAC...")
