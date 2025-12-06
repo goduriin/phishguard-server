@@ -1088,25 +1088,31 @@ def test_error():
 @app.route('/api/telegram/status', methods=['GET'])
 def telegram_status():
     """Возвращает статус Telegram алертов"""
-    health = telegram_alerts.check_health()
-    error_log = telegram_alerts.get_error_log(5)
-    
-    return jsonify({
-        'enabled': telegram_alerts.enabled,
-        'health': health,
-        'recent_errors': error_log,
-        'config': {
-            'bot_token_configured': bool(os.environ.get('TELEGRAM_BOT_TOKEN')),
-            'chat_id_configured': bool(os.environ.get('TELEGRAM_CHAT_ID')),
-            'max_retries': 3
-        }
-    })
+    try:
+        health = telegram_alerts.check_health() if telegram_alerts else {'status': 'disabled'}
+        error_log = telegram_alerts.get_error_log(5) if telegram_alerts else []
+        
+        return jsonify({
+            'enabled': telegram_alerts.enabled if telegram_alerts else False,
+            'health': health,
+            'recent_errors': error_log,
+            'config': {
+                'bot_token_configured': bool(os.environ.get('TELEGRAM_BOT_TOKEN')),
+                'chat_id_configured': bool(os.environ.get('TELEGRAM_CHAT_ID')),
+                'max_retries': 3
+            }
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/telegram/test', methods=['POST'])
 def telegram_test_endpoint():
     """Тестовый endpoint для отправки алертов"""
     try:
         data = request.json
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+            
         test_type = data.get('type', 'info')
         
         test_messages = {
@@ -1119,11 +1125,14 @@ def telegram_test_endpoint():
         
         message = test_messages.get(test_type, test_messages['info'])
         
-        success = telegram_alerts.send_message(
-            f"*API Test:* {message}\n`{datetime.now().strftime('%H:%M:%S')}`",
-            test_type
-        )
-        
+        if telegram_alerts and telegram_alerts.enabled:
+            success = telegram_alerts.send_message(
+                f"*API Test:* {message}\n`{datetime.now().strftime('%H:%M:%S')}`",
+                test_type
+            )
+        else:
+            success = False
+            
         return jsonify({
             'success': success,
             'type': test_type,
@@ -1133,7 +1142,7 @@ def telegram_test_endpoint():
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
+    
 # ==================== ЗАПУСК СЕРВЕРА ====================
 def run_development():
     """Запуск в режиме разработки (только для локальной разработки)"""
