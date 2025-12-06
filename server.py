@@ -14,37 +14,8 @@ from collections import defaultdict
 from threading import Lock
 from werkzeug.middleware.proxy_fix import ProxyFix
 from urllib.parse import urlparse, urljoin
-# В server.py добавить в начало:
-
-from sentry_setup import init_sentry
-init_sentry()
 
 app = Flask(__name__)
-
-# server.py - начало файла
-
-# ==================== SENTRY МОНИТОРИНГ ====================
-try:
-    from sentry_config import init_sentry, capture_error, capture_message
-    from sentry_decorators import sentry_trace_requests, track_performance
-    
-    # Инициализируем Sentry
-    sentry_initialized = init_sentry()
-    
-    if sentry_initialized:
-        print("🔧 Sentry мониторинг активен")
-        # Отправляем событие о запуске
-        capture_message("Сервер PhishGuard запущен", "info", {
-            'environment': os.environ.get('ENV', 'development'),
-            'port': os.environ.get('PORT', 5000)
-        })
-    else:
-        print("⚠️ Sentry мониторинг не активирован")
-        
-except ImportError as e:
-    print("⚠️ Sentry не установлен. Установите: pip install sentry-sdk[flask]")
-    print(f"   Ошибка импорта: {e}")
-    sentry_initialized = False
 
 # ==================== ПРОДАКШЕН CORS КОНФИГУРАЦИЯ ====================
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
@@ -481,7 +452,6 @@ def options_report_link():
 @app.route('/api/check-result', methods=['POST'])
 @hmac_required
 @rate_limit
-@sentry_trace_requests 
 def handle_check_result():
     """Принимает результаты проверки от расширения (с HMAC)"""
     try:
@@ -560,12 +530,6 @@ def handle_check_result():
             })
         
     except Exception as e:
-        if sentry_initialized:
-            capture_error(e, {
-                'endpoint': '/api/check-result',
-                'user_id': request.json.get('user_id') if request.json else None,
-                'method': request.method
-            })
         logger.error(f"Error in check-result: {e}")
         return jsonify({"error": "Internal server error"}), 500
 
@@ -653,46 +617,6 @@ def extract_domain(url):
         return urlparse(url).hostname
     except:
         return "invalid_url"
-
-@app.route('/api/test-sentry', methods=['GET', 'POST'])
-def test_sentry():
-    """Тестовый endpoint для проверки Sentry"""
-    
-    tests = {
-        'message': lambda: capture_message("Тестовое сообщение из /api/test-sentry", "info"),
-        'error': lambda: 1 / 0,  # Деление на ноль
-        'warning': lambda: capture_message("Тестовое предупреждение", "warning"),
-        'performance': lambda: time.sleep(0.5)  # Имитация медленного запроса
-    }
-    
-    test_type = request.args.get('type', 'message')
-    
-    if test_type in tests:
-        try:
-            if test_type == 'error':
-                tests[test_type]()  # Вызовет ошибку
-            else:
-                tests[test_type]()
-            
-            return jsonify({
-                'status': 'success',
-                'message': f'Test "{test_type}" executed',
-                'sentry_enabled': sentry_initialized
-            })
-            
-        except Exception as e:
-            # Ошибка будет автоматически отправлена в Sentry
-            return jsonify({
-                'status': 'error',
-                'message': f'Test "{test_type}" failed: {str(e)}',
-                'sentry_enabled': sentry_initialized
-            }), 500
-    
-    return jsonify({
-        'available_tests': list(tests.keys()),
-        'usage': '/api/test-sentry?type=message|error|warning|performance',
-        'sentry_enabled': sentry_initialized
-    })
 
 # Клавиатуры для бота
 def get_main_keyboard():
