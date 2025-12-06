@@ -1016,25 +1016,6 @@ def test_sentry():
         'environment': os.environ.get('ENV', 'not set')
     })
 
-@app.route('/api/sentry-status', methods=['GET'])
-def sentry_status():
-    """Проверка статуса Sentry"""
-    try:
-        import sentry_sdk
-        dsn = os.environ.get('SENTRY_DSN', 'not set')
-        
-        return jsonify({
-            'sentry_configured': bool(dsn and dsn != 'not set'),
-            'dsn_prefix': dsn[:30] + '...' if dsn and len(dsn) > 30 else dsn,
-            'environment': os.environ.get('ENV', 'not set'),
-            'sentry_module_available': True,
-            'message': 'Sentry seems to be configured'
-        })
-    except ImportError:
-        return jsonify({
-            'sentry_configured': False,
-            'message': 'sentry-sdk not installed'
-        }), 500
 # ==================== ЗАПУСК СЕРВЕРА ====================
 if __name__ == '__main__':
     print("🚀 Starting PhishGuard Server with FIXED HMAC...")
