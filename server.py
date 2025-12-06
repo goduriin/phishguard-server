@@ -893,7 +893,65 @@ def bot_status():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route('/api/test-sentry', methods=['GET'])
+def test_sentry():
+    """Тестовый endpoint для проверки Sentry"""
     
+    # Проверяем доступность Sentry
+    sentry_enabled = False
+    try:
+        # Пробуем импортировать Sentry
+        import sentry_sdk
+        sentry_enabled = True
+    except ImportError:
+        sentry_enabled = False
+    
+    # Тест 1: Простое сообщение
+    if sentry_enabled:
+        try:
+            sentry_sdk.capture_message("Тестовое сообщение из /api/test-sentry", level="info")
+            message_sent = True
+        except:
+            message_sent = False
+    else:
+        message_sent = False
+    
+    # Тест 2: Ошибка (опционально - раскомментируйте если нужно)
+    # try:
+    #     1 / 0  # Деление на ноль для теста
+    # except Exception as e:
+    #     if sentry_enabled:
+    #         sentry_sdk.capture_exception(e)
+    
+    return jsonify({
+        'status': 'success',
+        'message': 'Sentry test endpoint',
+        'sentry_enabled': sentry_enabled,
+        'test_message_sent': message_sent,
+        'server_time': datetime.now().isoformat(),
+        'instructions': 'Uncomment line 1/0 to test error tracking'
+    })   
+
+@app.route('/api/debug')
+def debug_info():
+    """Отладочная информация"""
+    import sys
+    
+    return jsonify({
+        'python_version': sys.version,
+        'flask_version': '2.3.3',
+        'environment': os.environ.get('ENV', 'not set'),
+        'sentry_dsn_set': bool(os.environ.get('SENTRY_DSN')),
+        'server_time': datetime.now().isoformat(),
+        'endpoints': [
+            '/health',
+            '/api/debug',
+            '/api/test-error',
+            '/status',
+            '/metrics'
+        ]
+    })
 # ==================== ЗАПУСК СЕРВЕРА ====================
 if __name__ == '__main__':
     print("🚀 Starting PhishGuard Server with FIXED HMAC...")
