@@ -1,3 +1,24 @@
+# ==================== ЗАГРУЗКА ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ====================
+from dotenv import load_dotenv
+import os
+
+# Загружаем переменные окружения из текущей папки
+env_path = '.env'
+load_dotenv(env_path)
+
+# Проверяем режим
+IS_PRODUCTION = os.environ.get('ENV') == 'production'
+print(f"🔧 Режим: {'ПРОДАКШЕН' if IS_PRODUCTION else 'РАЗРАБОТКА'}")
+
+print("=" * 60)
+print("🚀 ЗАПУСК PHISHGUARD SERVER")
+print("=" * 60)
+print(f"📂 Текущая директория: {os.getcwd()}")
+print(f"📁 Файл .env: {os.path.exists('.env')}")
+print(f"🔑 TELEGRAM_BOT_TOKEN: {'*' * 20}{os.environ.get('TELEGRAM_BOT_TOKEN', '')[-10:]}")
+print(f"🔢 TELEGRAM_CHAT_ID: {os.environ.get('TELEGRAM_CHAT_ID', 'НЕ НАЙДЕН')}")
+print("=" * 60)
+
 from flask import Flask, request, jsonify
 import requests
 import os
@@ -14,9 +35,63 @@ from collections import defaultdict
 from threading import Lock
 from werkzeug.middleware.proxy_fix import ProxyFix
 from urllib.parse import urlparse, urljoin
+import os
+from telegram_alerts import telegram_alerts, telegram_alert_on_error
+# ==================== TELEGRAM IMPORT ====================
+# ==================== TELEGRAM IMPORT ====================
+print("\n" + "=" * 50)
+print("🤖 ЗАГРУЗКА TELEGRAM АЛЕРТОВ")
+print("=" * 50)
+
+try:
+    # Пробуем импортировать наш модуль
+    from telegram_alerts import TelegramAlerts, telegram_alert_on_error
+    
+    # Создаем экземпляр
+    telegram_alerts = TelegramAlerts()
+    TELEGRAM_ENABLED = telegram_alerts.enabled
+    
+    if TELEGRAM_ENABLED:
+        print("✅ Telegram алерты ВКЛЮЧЕНЫ и готовы к работе!")
+    else:
+        print("⚠️ Telegram алерты ОТКЛЮЧЕНЫ (проверьте .env файл)")
+        
+except ImportError as e:
+    print(f"❌ Telegram модуль не найден: {e}")
+    TELEGRAM_ENABLED = False
+    telegram_alerts = None
+    
+    # Заглушка для декоратора
+    def telegram_alert_on_error(func):
+        return func
+        
+except Exception as e:
+    print(f"❌ Ошибка инициализации Telegram: {e}")
+    TELEGRAM_ENABLED = False
+    telegram_alerts = None
+    
+    def telegram_alert_on_error(func):
+        return func
+
+print("=" * 50)
+
 
 app = Flask(__name__)
 
+
+# Уведомление о запуске (Flask 2.3+ совместимость)
+def send_startup_alert():
+    """Отправляет уведомление о запуске сервера в Telegram"""
+    if TELEGRAM_ENABLED and telegram_alerts and hasattr(telegram_alerts, 'enabled') and telegram_alerts.enabled:
+        print("📤 Отправка уведомления о запуске в Telegram...")
+        telegram_alerts._send_startup_notification()
+        print("✅ Startup notification sent to Telegram")
+    else:
+        print("ℹ️ Telegram startup notification skipped")
+
+# Запускаем при старте сервера (не при первом запросе)
+with app.app_context():
+    send_startup_alert()
 # ==================== ПРОДАКШЕН CORS КОНФИГУРАЦИЯ ====================
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
@@ -458,6 +533,15 @@ def handle_check_result():
         data = request.json
         logger.info(f"Received HMAC-protected check result from user {data.get('user_id', 'unknown')}")
         
+# ДОБАВЬТЕ ЭТОТ КОД ДЛЯ ОТПРАВКИ В TELEGRAM ПРИ ФИШИНГЕ:
+        if data.get('is_malicious', False) and TELEGRAM_ENABLED and telegram_alerts.enabled:
+            telegram_alerts.send_security_alert(
+                'Фишинг',
+                data.get('url', 'Unknown URL'),
+                data.get('user_id', 'Unknown user'),
+                'critical'
+            )
+
         # Обновляем статистику
         stats['total_checks'] += 1
         if data.get('user_id'):
@@ -666,10 +750,12 @@ def get_main_keyboard():
             ]
         ]
     }
- 
+
+@telegram_alert_on_error  # ← ЭТА СТРОКА ДОБАВЛЯЕТ АВТОМАТИЧЕСКОЕ ОТСЛЕЖИВАНИЕ ОШИБОК
 def send_vk_message(user_id, message, keyboard=None):
     """Отправляет сообщение через VK API (продакшен версия)"""
     try:
+        logger.info(f"📨 Отправка сообщения пользователю {user_id}")
         logger.info(f"📨 Отправка сообщения пользователю {user_id}")
         
         params = {
@@ -713,10 +799,24 @@ def send_vk_message(user_id, message, keyboard=None):
             if error_code in error_solutions:
                 logger.error(f"💡 Решение: {error_solutions[error_code]}")
             
+            if TELEGRAM_ENABLED and telegram_alerts.enabled:
+                telegram_alerts.send_alert(
+                    "❌ Ошибка отправки VK сообщения",
+                    f"Пользователь: {user_id}\nКод ошибки: {error_code}",
+                    'error',
+                    {'error_msg': error_msg, 'solution': error_solutions.get(error_code, 'Unknown')}
+                )
             return False
             
         logger.info(f"✅ Сообщение отправлено пользователю {user_id}")
+        if TELEGRAM_ENABLED and telegram_alerts.enabled:
+            telegram_alerts.send_alert(
+                "✅ VK сообщение отправлено",
+                f"Пользователь: {user_id}\nДлина сообщения: {len(message)} символов",
+                'success'
+            )
         return True
+    
             
     except Exception as e:
         logger.error(f"❌ Ошибка отправки сообщения: {e}")
@@ -983,10 +1083,81 @@ def test_error():
             'timestamp': datetime.now().isoformat()
         }), 500
 
+# ==================== TELEGRAM ENDPOINTS ====================
+
+@app.route('/api/telegram/status', methods=['GET'])
+def telegram_status():
+    """Возвращает статус Telegram алертов"""
+    health = telegram_alerts.check_health()
+    error_log = telegram_alerts.get_error_log(5)
+    
+    return jsonify({
+        'enabled': telegram_alerts.enabled,
+        'health': health,
+        'recent_errors': error_log,
+        'config': {
+            'bot_token_configured': bool(os.environ.get('TELEGRAM_BOT_TOKEN')),
+            'chat_id_configured': bool(os.environ.get('TELEGRAM_CHAT_ID')),
+            'max_retries': 3
+        }
+    })
+
+@app.route('/api/telegram/test', methods=['POST'])
+def telegram_test_endpoint():
+    """Тестовый endpoint для отправки алертов"""
+    try:
+        data = request.json
+        test_type = data.get('type', 'info')
+        
+        test_messages = {
+            'info': 'Тестовое информационное сообщение от API',
+            'success': '✅ Тестовое сообщение об успехе',
+            'warning': '⚠️ Тестовое предупреждение',
+            'error': '🟠 Тестовая ошибка',
+            'critical': '🔴 Критическая тестовая ошибка'
+        }
+        
+        message = test_messages.get(test_type, test_messages['info'])
+        
+        success = telegram_alerts.send_message(
+            f"*API Test:* {message}\n`{datetime.now().strftime('%H:%M:%S')}`",
+            test_type
+        )
+        
+        return jsonify({
+            'success': success,
+            'type': test_type,
+            'message': message,
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 # ==================== ЗАПУСК СЕРВЕРА ====================
-if __name__ == '__main__':
-    print("🚀 Starting PhishGuard Server with FIXED HMAC...")
-    logger.info("PhishGuard Server starting with corrected HMAC")
+def run_development():
+    """Запуск в режиме разработки (только для локальной разработки)"""
+    print("🔧 Режим: РАЗРАБОТКА (Flask dev server)")
+    print("⚠️  НЕ ИСПОЛЬЗУЙТЕ ДЛЯ ПРОДАКШЕНА!")
     
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port, debug=False)
+
+def run_production():
+    """Запуск в продакшен режиме (используется на Railway)"""
+    print("🚀 Режим: ПРОДАКШЕН (Gunicorn)")
+    print("✅ Оптимизировано для работы 24/7")
+    
+    # Gunicorn уже запускает приложение
+    # Эта функция только для информации
+    port = os.environ.get('PORT', '5000')
+    print(f"   Порт: {port}")
+    print(f"   Воркеры: 2")
+    print(f"   Потоки: 4")
+    print("✅ Сервер готов к работе")
+
+if __name__ == '__main__':
+    if IS_PRODUCTION:
+        run_production()
+    else:
+        run_development()
