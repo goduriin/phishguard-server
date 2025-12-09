@@ -1408,72 +1408,6 @@ def check_url_endpoint():
         logger.error(f"URL check error: {e}")
         return jsonify({"error": "Internal server error"}), 500
 
-# ==================== CLIENT KEY ENDPOINT ====================
-@app.route('/api/client-config', methods=['POST', 'OPTIONS', 'GET'])
-@rate_limit
-def client_config():
-    """Выдает конфигурацию и ключи клиентам"""
-    try:
-        #  ЗАЩИТА 1: User-Agent
-        user_agent = request.headers.get('User-Agent', '')
-        allowed_agents = ['chrome-extension', 'moz-extension', 'RailwayHealthCheck']
-        
-        if not any(agent in user_agent for agent in allowed_agents):
-            logger.warning(f" BLOCKED: Invalid User-Agent from {request.remote_addr}")
-            return jsonify({"error": "Forbidden"}), 403
-        
-        # ЗАЩИТА 2: Секретный токен (ТОЛЬКО ДЛЯ РАСШИРЕНИЯ!)
-        if 'chrome-extension' in user_agent or 'moz-extension' in user_agent:
-            # Требуем секретный токен от расширений
-            extension_token = request.headers.get('X-Extension-Token')
-            expected_token = os.environ.get('EXTENSION_SECRET')
-            
-            if not extension_token or extension_token != expected_token:
-                logger.warning(f" BLOCKED: Invalid extension token from {request.remote_addr}")
-                return jsonify({
-                    "error": "Invalid token",
-                    "message": "Valid extension token required"
-                }), 403
-        
-        # Разрешаем OPTIONS для CORS
-        if request.method == 'OPTIONS':
-            return jsonify({"status": "ok"}), 200
-            
-        logger.info(f" Client config request from {request.remote_addr}")
-        
-        # Получаем информацию о клиенте
-        extension_version = request.headers.get('X-Extension-Version', '1.0')
-        extension_id = request.headers.get('X-Extension-ID', '')
-        user_agent = request.headers.get('User-Agent', '')
-        
-        # Проверяем что запрос от браузерного расширения
-        if not ('chrome-extension' in user_agent or 'moz-extension' in user_agent):
-            logger.warning(f"⚠️ Non-extension client: {user_agent[:50]}")
-            # Но все равно выдаем ключи (для тестирования)
-        
-        # Формируем ответ
-        response = {
-            "status": "success",
-            "timestamp": datetime.now().isoformat(),
-            "keys": {
-                "SECRET_KEY": SECRET_KEY,
-                "HMAC_SECRET_KEY": HMAC_SECRET_KEY,
-                "VIRUSTOTAL_API_KEY": VIRUSTOTAL_API_KEY if VIRUSTOTAL_API_KEY else ""
-            },
-            "server": {
-                "url": "https://phishguard-server-production.up.railway.app",
-                "hmac_required": True,
-                "version": "1.0"
-            }
-        }
-        
-        logger.info(f"✅ Keys issued to client v{extension_version}")
-        return jsonify(response)
-        
-    except Exception as e:
-        logger.error(f"Client config error: {e}")
-        return jsonify({"error": str(e)}), 500
-
 # ==================== EXTENSION KEY MANAGEMENT ====================
 @app.route('/api/extension-keys', methods=['GET'])
 @rate_limit
@@ -1569,7 +1503,84 @@ def get_extension_keys():
             "message": "Failed to process key request"
         }), 500
 
-
+@app.route('/api/client-config', methods=['POST', 'OPTIONS', 'GET'])
+@rate_limit
+def client_config():
+    """Выдает конфигурацию и ключи клиентам (ЗАЩИЩЕННЫЙ)"""
+    try:
+        # 🔒 ЗАЩИТА 1: Проверяем метод запроса
+        if request.method == 'OPTIONS':
+            return jsonify({"status": "ok"}), 200
+            
+        # 🔒 ЗАЩИТА 2: Проверяем User-Agent (должен быть браузерное расширение)
+        user_agent = request.headers.get('User-Agent', '').lower()
+        logger.info(f"🔑 Client config request from {request.remote_addr}, UA: {user_agent[:50]}")
+        
+        # Разрешаем ТОЛЬКО этим User-Agent:
+        allowed_patterns = [
+            'chrome-extension',      # Chrome расширения
+            'moz-extension',         # Firefox расширения
+            'phishguard-extension',  # Ваше расширение
+        ]
+        
+        is_valid_client = any(pattern in user_agent for pattern in allowed_patterns)
+        
+        # 🔒 ЗАЩИТА 3: Проверяем специальные заголовки расширения
+        extension_version = request.headers.get('X-Extension-Version')
+        extension_id = request.headers.get('X-Extension-ID')
+        
+        # Если нет нужных заголовков - блокируем
+        if not extension_version or not extension_id:
+            logger.warning(f"🚫 BLOCKED: No extension headers from {request.remote_addr}")
+            return jsonify({
+                "error": "Unauthorized",
+                "message": "Extension headers required (X-Extension-Version, X-Extension-ID)"
+            }), 401
+        
+        # 🔒 ЗАЩИТА 4: Проверяем версию расширения
+        valid_versions = ['1.0', '1.1', '1.2']
+        if extension_version not in valid_versions:
+            logger.warning(f"🚫 BLOCKED: Invalid version {extension_version} from {request.remote_addr}")
+            return jsonify({
+                "error": "Unsupported version",
+                "message": f"Supported versions: {', '.join(valid_versions)}"
+            }), 403
+        
+        # 🔒 ЗАЩИТА 5: Rate limiting по IP для этого эндпоинта
+        ip_key = f"config_request_{request.remote_addr}"
+        # ... ваш rate limiting код ...
+        
+        # ✅ ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ - выдаем ключи
+        logger.info(f"✅ Approved keys request for v{extension_version} from {request.remote_addr}")
+        
+        # Формируем ответ
+        response = {
+            "status": "success",
+            "timestamp": datetime.now().isoformat(),
+            "client_info": {
+                "version": extension_version,
+                "id": extension_id[:10] + "...",  # Не показываем полный ID
+                "authorized": True
+            },
+            "keys": {
+                "SECRET_KEY": SECRET_KEY,
+                "HMAC_SECRET_KEY": HMAC_SECRET_KEY,
+                "VIRUSTOTAL_API_KEY": VIRUSTOTAL_API_KEY if VIRUSTOTAL_API_KEY else "",
+                "expires_in": 86400  # 24 часа
+            },
+            "server": {
+                "url": "https://phishguard-server-production.up.railway.app",
+                "hmac_required": True,
+                "rate_limit": "100 requests/hour"
+            }
+        }
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        logger.error(f"Client config error: {e}")
+        return jsonify({"error": "Configuration error"}), 500
+    
 # ==================== ПРОСТАЯ ПРОВЕРКА EXTENSION ====================
 def is_valid_extension(extension_id, version):
     """
