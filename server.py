@@ -1414,33 +1414,32 @@ def check_url_endpoint():
 def client_config():
     """Выдает конфигурацию и ключи клиентам"""
     try:
+        #  ЗАЩИТА 1: User-Agent
         user_agent = request.headers.get('User-Agent', '')
+        allowed_agents = ['chrome-extension', 'moz-extension', 'RailwayHealthCheck']
         
-        # Разрешаем только:
-        # 1. Ваше расширение Chrome/Firefox
-        # 2. Ваши тестовые запросы (curl)
-        # 3. Health checks
+        if not any(agent in user_agent for agent in allowed_agents):
+            logger.warning(f" BLOCKED: Invalid User-Agent from {request.remote_addr}")
+            return jsonify({"error": "Forbidden"}), 403
         
-        allowed_agents = [
-            'chrome-extension',  # Chrome расширение
-            'moz-extension',     # Firefox расширение  
-            'RailwayHealthCheck', # Railway health checks
-        ]
-        
-        is_allowed = any(agent in user_agent for agent in allowed_agents)
-        
-        if not is_allowed:
-            logger.warning(f"🚨 BLOCKED: Keys request from {request.remote_addr}, UA: {user_agent[:100]}")
-            return jsonify({
-                "error": "Forbidden",
-                "message": "This endpoint is for authorized clients only"
-            }), 403
+        # ЗАЩИТА 2: Секретный токен (ТОЛЬКО ДЛЯ РАСШИРЕНИЯ!)
+        if 'chrome-extension' in user_agent or 'moz-extension' in user_agent:
+            # Требуем секретный токен от расширений
+            extension_token = request.headers.get('X-Extension-Token')
+            expected_token = os.environ.get('EXTENSION_SECRET')
+            
+            if not extension_token or extension_token != expected_token:
+                logger.warning(f" BLOCKED: Invalid extension token from {request.remote_addr}")
+                return jsonify({
+                    "error": "Invalid token",
+                    "message": "Valid extension token required"
+                }), 403
         
         # Разрешаем OPTIONS для CORS
         if request.method == 'OPTIONS':
             return jsonify({"status": "ok"}), 200
             
-        logger.info(f"🔑 Client config request from {request.remote_addr}")
+        logger.info(f" Client config request from {request.remote_addr}")
         
         # Получаем информацию о клиенте
         extension_version = request.headers.get('X-Extension-Version', '1.0')
