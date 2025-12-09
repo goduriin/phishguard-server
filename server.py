@@ -37,7 +37,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from urllib.parse import urlparse, urljoin
 import os
 from telegram_alerts import telegram_alerts, telegram_alert_on_error
-
+# ==================== TELEGRAM IMPORT ====================
 # ==================== TELEGRAM IMPORT ====================
 print("\n" + "=" * 50)
 print("🤖 ЗАГРУЗКА TELEGRAM АЛЕРТОВ")
@@ -436,40 +436,6 @@ class RateLimiter:
             self.requests[ip_address].append(current_time)
             return True
 
-# ==================== ДЕДУПЛИКАЦИЯ ФИШИНГ-УВЕДОМЛЕНИЙ ====================
-class PhishingDeduplicator:
-    def __init__(self):
-        self.sent_alerts = {}  # url_hash -> timestamp
-        self.ALERT_COOLDOWN = 300  # 5 минут между уведомлениями об одном домене
-    
-    def get_url_hash(self, url):
-        """Создает хеш URL для идентификации дубликатов"""
-        domain = extract_domain(url)
-        return hashlib.md5(domain.encode()).hexdigest()
-    
-    def can_send_alert(self, url):
-        """Проверяет, можно ли отправить уведомление"""
-        url_hash = self.get_url_hash(url)
-        current_time = time.time()
-        
-        if url_hash in self.sent_alerts:
-            last_sent = self.sent_alerts[url_hash]
-            if current_time - last_sent < self.ALERT_COOLDOWN:
-                return False
-        
-        self.sent_alerts[url_hash] = current_time
-        return True
-    
-    def cleanup_old(self):
-        """Очищает старые записи"""
-        current_time = time.time()
-        old_keys = [k for k, v in self.sent_alerts.items() 
-                   if current_time - v > 3600]  # 1 час
-        for key in old_keys:
-            del self.sent_alerts[key]
-
-phishing_dedup = PhishingDeduplicator()
-
 limiter = RateLimiter()
 
 def rate_limit(f):
@@ -567,23 +533,6 @@ def handle_check_result():
         data = request.json
         logger.info(f"Received HMAC-protected check result from user {data.get('user_id', 'unknown')}")
         
-         #ПРОВЕРЯЕМ ДЕДУПЛИКАЦИЮ ПЕРЕД ОТПРАВКОЙ (ДОБАВЬТЕ ЭТОТ КОД)
-        url = data.get('final_url', data.get('url', ''))
-        
-        if data.get('is_malicious', False):
-            # Очищаем старые записи
-            phishing_dedup.cleanup_old()
-            
-            # Проверяем, нужно ли отправлять уведомление
-            if not phishing_dedup.can_send_alert(url):
-                logger.info(f"⏭️ Duplicate phishing alert skipped for {extract_domain(url)}")
-                return jsonify({
-                    "status": "success", 
-                    "malicious_detected": True,
-                    "notification_sent": False,
-                    "reason": "duplicate_cooldown"
-                })
-
 # ДОБАВЬТЕ ЭТОТ КОД ДЛЯ ОТПРАВКИ В TELEGRAM ПРИ ФИШИНГЕ:
         if data.get('is_malicious', False) and TELEGRAM_ENABLED and telegram_alerts.enabled:
             telegram_alerts.send_security_alert(
@@ -755,7 +704,7 @@ def extract_domain(url):
 
 # Клавиатуры для бота
 def get_main_keyboard():
-    """Клавиатура для VK бота с кнопкой проверки URL"""
+    """Клавиатура для VK бота (рабочая версия)"""
     return {
         "one_time": False,
         "buttons": [
@@ -763,7 +712,7 @@ def get_main_keyboard():
                 {
                     "action": {
                         "type": "text",
-                        "payload": '{"command":"help"}',
+                        "payload": "{\"command\":\"help\"}",
                         "label": "🛡️ Помощь"
                     },
                     "color": "primary"
@@ -773,7 +722,7 @@ def get_main_keyboard():
                 {
                     "action": {
                         "type": "text",
-                        "payload": '{"command":"stats"}',
+                        "payload": "{\"command\":\"stats\"}",
                         "label": "📊 Статистика"
                     },
                     "color": "positive"
@@ -783,17 +732,17 @@ def get_main_keyboard():
                 {
                     "action": {
                         "type": "text",
-                        "payload": '{"command":"check_url"}',
-                        "label": "🔍 Проверить URL"
+                        "payload": "{\"command\":\"all_links\"}",
+                        "label": "🔗 Все ссылки"
                     },
-                    "color": "secondary"
+                    "color": "primary"
                 }
             ],
             [
                 {
                     "action": {
                         "type": "text",
-                        "payload": '{"command":"malicious_links"}',
+                        "payload": "{\"command\":\"malicious_links\"}",
                         "label": "🚫 Опасные ссылки"
                     },
                     "color": "negative"
@@ -873,56 +822,6 @@ def send_vk_message(user_id, message, keyboard=None):
         logger.error(f"❌ Ошибка отправки сообщения: {e}")
         return False       
 
-@app.route('/api/check-url', methods=['POST'])
-@hmac_required
-@rate_limit
-def check_url_endpoint():
-    """Проверка URL по запросу пользователя"""
-    try:
-        data = request.json
-        if not data or 'url' not in data:
-            return jsonify({"error": "URL is required"}), 400
-        
-        url = data['url']
-        user_id = data.get('user_id')
-        
-        logger.info(f"Manual URL check requested by {user_id}: {url}")
-        
-        # Проверяем через VirusTotal
-        vt_result = check_virustotal(url)
-        
-        if vt_result.get('error'):
-            return jsonify({
-                "status": "error",
-                "message": "Failed to check URL",
-                "details": vt_result.get('message')
-            }), 500
-        
-        is_malicious = vt_result.get('malicious_count', 0) > 0
-        
-        # Формируем ответ
-        result = {
-            "status": "success",
-            "url": url,
-            "domain": extract_domain(url),
-            "is_malicious": is_malicious,
-            "virustotal_stats": {
-                "malicious": vt_result.get('malicious_count', 0),
-                "suspicious": vt_result.get('suspicious_count', 0),
-                "harmless": vt_result.get('harmless_count', 0),
-                "undetected": vt_result.get('undetected_count', 0),
-                "total_engines": vt_result.get('total_engines', 0)
-            },
-            "timestamp": datetime.now().isoformat(),
-            "message": "✅ URL безопасен" if not is_malicious else "🚫 ФИШИНГ ОБНАРУЖЕН"
-        }
-        
-        return jsonify(result)
-        
-    except Exception as e:
-        logger.error(f"URL check error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
-
 @app.route('/vk-callback', methods=['POST'])
 @rate_limit
 def vk_callback():
@@ -998,81 +897,7 @@ def vk_callback():
 
 📈 Бот активно защищает пользователей ВК!"""
                 send_vk_message(user_id, stats_message, get_main_keyboard())
-            
-            elif text in ['check_url', 'check', 'проверить']:
-                check_message = """🔍 **Проверить URL**
-Отправьте мне ссылку для проверки, например:
-`https://example.com`
-
-Я проверю её через VirusTotal и сообщу результат.
-
-📌 **Формат:** просто отправьте ссылку в следующем сообщении."""
-                send_vk_message(user_id, check_message)
-
-            elif text.startswith('http://') or text.startswith('https://'):
-                # Пользователь отправил URL для проверки
-                url = text.strip()
-                logger.info(f"User {user_id} requested URL check: {url}")
                 
-                # Проверяем URL
-                check_message = f"""⏳ Проверяю ссылку...
-📌 URL: {url[:50]}...
-🌐 Домен: {extract_domain(url)}
-
-Пожалуйста, подождите 5-10 секунд..."""
-                send_vk_message(user_id, check_message)
-                
-                try:
-                    # Выполняем проверку через VirusTotal
-                    vt_result = check_virustotal(url)
-                    
-                    if vt_result.get('error'):
-                        result_message = f"""❌ Не удалось проверить ссылку
-
-Ошибка: {vt_result.get('message', 'Unknown error')}
-
-Попробуйте позже или проверьте правильность URL."""
-                    else:
-                        is_malicious = vt_result.get('malicious_count', 0) > 0
-                        
-                        if is_malicious:
-                            result_message = f"""🚫 **ФИШИНГ ОБНАРУЖЕН!**
-
-📌 URL: {url[:80]}...
-🌐 Домен: {extract_domain(url)}
-
-📊 **Результаты VirusTotal:**
-• 🚫 Вредоносных: {vt_result.get('malicious_count', 0)}
-• ⚠️ Подозрительных: {vt_result.get('suspicious_count', 0)}
-• ✅ Безопасных: {vt_result.get('harmless_count', 0)}
-• ❓ Неопределенных: {vt_result.get('undetected_count', 0)}
-
-🚫 **НЕ ПЕРЕХОДИТЕ по этой ссылке!**
-⚠️ Это может быть фишинг или мошенничество!"""
-                        else:
-                            result_message = f"""✅ **URL БЕЗОПАСЕН**
-
-📌 URL: {url[:80]}...
-🌐 Домен: {extract_domain(url)}
-
-📊 **Результаты VirusTotal:**
-• 🚫 Вредоносных: {vt_result.get('malicious_count', 0)}
-• ⚠️ Подозрительных: {vt_result.get('suspicious_count', 0)}
-• ✅ Безопасных: {vt_result.get('harmless_count', 0)}
-• ❓ Неопределенных: {vt_result.get('undetected_count', 0)}
-
-✅ Можно переходить по ссылке (но всегда будьте осторожны)!"""
-                    
-                    send_vk_message(user_id, result_message, get_main_keyboard())
-                    
-                except Exception as e:
-                    logger.error(f"URL check failed: {e}")
-                    error_message = f"""❌ Ошибка проверки
-
-Не удалось проверить ссылку.
-Пожалуйста, попробуйте позже."""
-                    send_vk_message(user_id, error_message, get_main_keyboard())      
-            
             elif text in ['all_links', 'links']:
                 if stats['link_history']:
                     recent_links = stats['link_history'][-10:]  # Последние 10 ссылок
@@ -1317,106 +1142,7 @@ def telegram_test_endpoint():
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
-# Добавим функцию проверки VirusTotal
-def check_virustotal(url):
-    """Проверяет URL через VirusTotal API"""
-    try:
-        if not VIRUSTOTAL_API_KEY:
-            return {"error": True, "message": "VirusTotal API key not configured"}
-        
-        # Подготавливаем URL для проверки
-        import base64
-        
-        # Кодируем URL для VirusTotal
-        url_id = base64.urlsafe_b64encode(url.encode()).decode().strip('=')
-        
-        # Запрашиваем отчет
-        headers = {
-            'x-apikey': VIRUSTOTAL_API_KEY,
-            'Accept': 'application/json'
-        }
-        
-        response = requests.get(
-            f'https://www.virustotal.com/api/v3/urls/{url_id}',
-            headers=headers,
-            timeout=10
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            stats = data.get('data', {}).get('attributes', {}).get('last_analysis_stats', {})
-            
-            return {
-                "malicious_count": stats.get('malicious', 0),
-                "suspicious_count": stats.get('suspicious', 0),
-                "harmless_count": stats.get('harmless', 0),
-                "undetected_count": stats.get('undetected', 0),
-                "total_engines": sum(stats.values()),
-                "error": False
-            }
-        elif response.status_code == 404:
-            # URL не найден в базе, нужно проанализировать
-            return analyze_virustotal(url)
-        else:
-            return {"error": True, "message": f"VirusTotal API error: {response.status_code}"}
-            
-    except requests.exceptions.Timeout:
-        return {"error": True, "message": "VirusTotal timeout"}
-    except Exception as e:
-        logger.error(f"VirusTotal check error: {e}")
-        return {"error": True, "message": str(e)}
-
-def analyze_virustotal(url):
-    """Отправляет URL на анализ в VirusTotal"""
-    try:
-        headers = {
-            'x-apikey': VIRUSTOTAL_API_KEY,
-            'Accept': 'application/json'
-        }
-        
-        # Отправляем URL на анализ
-        response = requests.post(
-            'https://www.virustotal.com/api/v3/urls',
-            headers=headers,
-            data={'url': url},
-            timeout=10
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            analysis_id = data.get('data', {}).get('id')
-            
-            if analysis_id:
-                # Ждем несколько секунд и запрашиваем результат
-                import time
-                time.sleep(3)
-                
-                report_response = requests.get(
-                    f'https://www.virustotal.com/api/v3/analyses/{analysis_id}',
-                    headers=headers,
-                    timeout=10
-                )
-                
-                if report_response.status_code == 200:
-                    report_data = report_response.json()
-                    stats = report_data.get('data', {}).get('attributes', {}).get('stats', {})
-                    
-                    return {
-                        "malicious_count": stats.get('malicious', 0),
-                        "suspicious_count": stats.get('suspicious', 0),
-                        "harmless_count": stats.get('harmless', 0),
-                        "undetected_count": stats.get('undetected', 0),
-                        "total_engines": sum(stats.values()),
-                        "error": False
-                    }
-        
-        return {"error": True, "message": "Failed to analyze URL"}
-        
-    except Exception as e:
-        logger.error(f"VirusTotal analysis error: {e}")
-        return {"error": True, "message": str(e)}
-
+    
 # ==================== ЗАПУСК СЕРВЕРА ====================
 def run_development():
     """Запуск в режиме разработки (только для локальной разработки)"""
