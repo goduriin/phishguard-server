@@ -1414,6 +1414,28 @@ def check_url_endpoint():
 def client_config():
     """Выдает конфигурацию и ключи клиентам"""
     try:
+        user_agent = request.headers.get('User-Agent', '')
+        
+        # Разрешаем только:
+        # 1. Ваше расширение Chrome/Firefox
+        # 2. Ваши тестовые запросы (curl)
+        # 3. Health checks
+        
+        allowed_agents = [
+            'chrome-extension',  # Chrome расширение
+            'moz-extension',     # Firefox расширение  
+            'RailwayHealthCheck', # Railway health checks
+        ]
+        
+        is_allowed = any(agent in user_agent for agent in allowed_agents)
+        
+        if not is_allowed:
+            logger.warning(f"🚨 BLOCKED: Keys request from {request.remote_addr}, UA: {user_agent[:100]}")
+            return jsonify({
+                "error": "Forbidden",
+                "message": "This endpoint is for authorized clients only"
+            }), 403
+        
         # Разрешаем OPTIONS для CORS
         if request.method == 'OPTIONS':
             return jsonify({"status": "ok"}), 200
