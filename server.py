@@ -1408,6 +1408,51 @@ def check_url_endpoint():
         logger.error(f"URL check error: {e}")
         return jsonify({"error": "Internal server error"}), 500
 
+# ==================== CLIENT KEY ENDPOINT ====================
+@app.route('/api/client-config', methods=['POST', 'OPTIONS', 'GET'])
+@rate_limit
+def client_config():
+    """Выдает конфигурацию и ключи клиентам"""
+    try:
+        # Разрешаем OPTIONS для CORS
+        if request.method == 'OPTIONS':
+            return jsonify({"status": "ok"}), 200
+            
+        logger.info(f"🔑 Client config request from {request.remote_addr}")
+        
+        # Получаем информацию о клиенте
+        extension_version = request.headers.get('X-Extension-Version', '1.0')
+        extension_id = request.headers.get('X-Extension-ID', '')
+        user_agent = request.headers.get('User-Agent', '')
+        
+        # Проверяем что запрос от браузерного расширения
+        if not ('chrome-extension' in user_agent or 'moz-extension' in user_agent):
+            logger.warning(f"⚠️ Non-extension client: {user_agent[:50]}")
+            # Но все равно выдаем ключи (для тестирования)
+        
+        # Формируем ответ
+        response = {
+            "status": "success",
+            "timestamp": datetime.now().isoformat(),
+            "keys": {
+                "SECRET_KEY": SECRET_KEY,
+                "HMAC_SECRET_KEY": HMAC_SECRET_KEY,
+                "VIRUSTOTAL_API_KEY": VIRUSTOTAL_API_KEY if VIRUSTOTAL_API_KEY else ""
+            },
+            "server": {
+                "url": "https://phishguard-server-production.up.railway.app",
+                "hmac_required": True,
+                "version": "1.0"
+            }
+        }
+        
+        logger.info(f"✅ Keys issued to client v{extension_version}")
+        return jsonify(response)
+        
+    except Exception as e:
+        logger.error(f"Client config error: {e}")
+        return jsonify({"error": str(e)}), 500
+
 # ==================== EXTENSION KEY MANAGEMENT ====================
 @app.route('/api/extension-keys', methods=['GET'])
 @rate_limit
