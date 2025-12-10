@@ -1,4 +1,3 @@
-# check_before_deploy.py
 import os
 import json
 import sys
