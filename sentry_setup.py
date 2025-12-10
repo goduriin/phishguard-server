@@ -1,4 +1,3 @@
-# sentry_config.py
 import os
 import sentry_sdk
 from sentry_sdk.integrations.flask import FlaskIntegration
@@ -30,22 +29,22 @@ def init_sentry():
     
     try:
         sentry_sdk.init(
-            # === ОСНОВНЫЕ НАСТРОЙКИ ===
+            # ОСНОВНЫЕ НАСТРОЙКИ #
             dsn=sentry_dsn,
             integrations=[FlaskIntegration()],
             
-            # === PERFORMANCE TRACING ===
+            # PERFORMANCE TRACING #
             # Включаем трейсинг для 100% запросов
             traces_sample_rate=1.0,
             
-            # === ОКРУЖЕНИЕ И РЕЛИЗ ===
+            # ОКРУЖЕНИЕ И РЕЛИЗ #
             # Определяем окружение (development/staging/production)
             environment=os.environ.get('ENV', 'development'),
             
             # Версия приложения (можно использовать git commit)
             release="phishguard@1.0.0",
             
-            # === БЕЗОПАСНОСТЬ И ПРИВАТНОСТЬ ===
+            # БЕЗОПАСНОСТЬ И ПРИВАТНОСТЬ
             # НЕ отправляем персональные данные (ID пользователей и т.д.)
             send_default_pii=False,
             
@@ -55,15 +54,15 @@ def init_sentry():
             # Фильтруем чувствительные данные
             before_send=lambda event, hint: filter_sensitive_data(event),
             
-            # === DEBUG НАСТРОЙКИ ===
+            # DEBUG НАСТРОЙКИ 
             # Включаем debug режим если в development
             debug=os.environ.get('ENV') == 'development',
             
-            # === ПРОФИЛИРОВАНИЕ ===
+            # ПРОФИЛИРОВАНИЕ 
             # Включаем profiling (только для production)
             profiles_sample_rate=1.0 if os.environ.get('ENV') == 'production' else 0.0,
             
-            # === ОТЛАДКА ===
+            # ОТЛАДКА
             # Логируем все что отправляется в Sentry (для отладки)
             # debug=True  # Раскомментируйте для отладки
         )
