@@ -1,4 +1,3 @@
-# sentry_decorators.py
 import functools
 import time
 from flask import request
