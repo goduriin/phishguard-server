@@ -1,4 +1,3 @@
-# telegram_alerts.py - ИСПРАВЛЕННАЯ ВЕРСИЯ
 import os
 import requests
 import json
@@ -7,7 +6,7 @@ import threading
 import time
 from functools import wraps
 import logging
-from dotenv import load_dotenv  # ← ДОБАВЬТЕ ЭТОТ ИМПОРТ
+from dotenv import load_dotenv  
 
 # Загружаем переменные окружения СРАЗУ
 load_dotenv()
