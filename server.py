@@ -37,7 +37,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from urllib.parse import urlparse, urljoin
 import os
 from telegram_alerts import telegram_alerts, telegram_alert_on_error
-# ==================== TELEGRAM IMPORT ====================
+
 # ==================== TELEGRAM IMPORT ====================
 print("\n" + "=" * 50)
 print("🤖 ЗАГРУЗКА TELEGRAM АЛЕРТОВ")
@@ -89,7 +89,7 @@ def send_startup_alert():
     else:
         print("ℹ️ Telegram startup notification skipped")
 
-# Запускаем при старте сервера (не при первом запросе)
+# Запускаем при старте сервера 
 with app.app_context():
     send_startup_alert()
 # ==================== ПРОДАКШЕН CORS КОНФИГУРАЦИЯ ====================
@@ -189,7 +189,7 @@ stats = {
 
 stats_lock = Lock() 
 
-# ==================== HMAC ФУНКЦИИ (ИСПРАВЛЕННЫЕ) ====================
+# ==================== HMAC ФУНКЦИИ  ====================
 def deep_sort_dict(obj):
     """Рекурсивно сортирует ключи словаря ТОЧНО как в клиенте"""
     if isinstance(obj, dict):
@@ -226,8 +226,7 @@ def generate_hmac_signature(data, timestamp):
         else:
             sorted_data = data
         
-        # 2. JSON строка (ТОЧНО как в клиенте: JSON.stringify(sortedData))
-        # Используем separators=(',', ':') чтобы убрать лишние пробелы
+        # 2. JSON строка (ТОЧНО как в клиенте
         data_str = json.dumps(sorted_data, separators=(',', ':'))
         print(f"  Data JSON (first 100): {data_str[:100]}...")
         print(f"  Data JSON length: {len(data_str)}")
@@ -583,7 +582,7 @@ def handle_check_result():
                     "notification_sent": False,
                     "reason": "duplicate_cooldown"
                 })
-# ДОБАВЬТЕ ЭТОТ КОД ДЛЯ ОТПРАВКИ В TELEGRAM ПРИ ФИШИНГЕ:
+#ОТПРАВКА В ТЕЛЕГРАМ ПРИ ФИШИНГЕ:
         if data.get('is_malicious', False) and TELEGRAM_ENABLED and telegram_alerts.enabled:
             telegram_alerts.send_security_alert(
                 'Фишинг',
@@ -680,7 +679,7 @@ def handle_link_report():
         logger.info(f"Received HMAC-protected link report from user {data.get('user_id', 'unknown')}")
         
         # Обновляем статистику
-        with stats_lock:  # Используем блокировку для потокобезопасности
+        with stats_lock:  
             stats['total_checks'] += 1
             if data.get('user_id'):
                 stats['users'].add(data.get('user_id'))
@@ -719,7 +718,7 @@ def handle_link_report():
             
         logger.info(f"Saved {link_type} link: {domain}")
         
-        # ПРОСТАЯ ПРОВЕРКА ДУБЛИКАТОВ (опционально)
+        # ПРОСТАЯ ПРОВЕРКА ДУБЛИКАТОВ
         if is_malicious:
             # Ищем похожие фишинговые ссылки за последний час
             one_hour_ago = datetime.now().timestamp() - 3600
@@ -801,7 +800,7 @@ def get_main_keyboard():
         ]
     }
 
-@telegram_alert_on_error  # ← ЭТА СТРОКА ДОБАВЛЯЕТ АВТОМАТИЧЕСКОЕ ОТСЛЕЖИВАНИЕ ОШИБОК
+@telegram_alert_on_error  #автоматическое отслеживание ошибок
 def send_vk_message(user_id, message, keyboard=None):
     """Отправляет сообщение через VK API (продакшен версия)"""
     try:
@@ -817,7 +816,6 @@ def send_vk_message(user_id, message, keyboard=None):
         }
         
         if keyboard:
-            # Важно: не использовать ensure_ascii=False для VK API
             params['keyboard'] = json.dumps(keyboard)
             logger.debug(f"Клавиатура добавлена: {len(params['keyboard'])} символов")
         
@@ -837,7 +835,7 @@ def send_vk_message(user_id, message, keyboard=None):
             
             logger.error(f"❌ VK API ошибка {error_code}: {error_msg}")
             
-            # Частые ошибки и их решения
+            # Ошибки и их решения
             error_solutions = {
                 901: "Разрешите сообществу отправлять сообщения в настройках",
                 902: "Пользователь должен начать диалог первым",
@@ -1131,13 +1129,6 @@ def test_sentry():
             message_sent = False
     else:
         message_sent = False
-    
-    # Тест 2: Ошибка (опционально - раскомментируйте если нужно)
-    # try:
-    #     1 / 0  # Деление на ноль для теста
-    # except Exception as e:
-    #     if sentry_enabled:
-    #         sentry_sdk.capture_exception(e)
     
     return jsonify({
         'status': 'success',
