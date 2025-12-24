@@ -1,4 +1,3 @@
-# telegram_alerts.py - ИСПРАВЛЕННАЯ ВЕРСИЯ
 import os
 import requests
 import json
@@ -7,88 +6,81 @@ import threading
 import time
 from functools import wraps
 import logging
-from dotenv import load_dotenv  # ← ДОБАВЬТЕ ЭТОТ ИМПОРТ
+from dotenv import load_dotenv  
 
-# Загружаем переменные окружения СРАЗУ
+
 load_dotenv()
 
-# Настройка логирования
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class TelegramAlerts:
-    """
-    КЛАСС ДЛЯ ОТПРАВКИ АЛЕРТОВ В TELEGRAM
-    """
-    
     def __init__(self, max_retries=3, retry_delay=2):
-        """
-        ИНИЦИАЛИЗАЦИЯ TELEGRAM БОТА
-        """
+        
         print("=" * 50)
-        print("🤖 ИНИЦИАЛИЗАЦИЯ TELEGRAM АЛЕРТОВ")
+        print("ИНИЦИАЛИЗАЦИЯ TELEGRAM АЛЕРТОВ")
         print("=" * 50)
         
-        # Получаем настройки из переменных окружения
+        #получаем настройки из переменных окружения
         self.bot_token = os.environ.get('TELEGRAM_BOT_TOKEN', '').strip()
         self.chat_id = os.environ.get('TELEGRAM_CHAT_ID', '').strip()
         
-        print(f"🔑 Bot Token: {'*' * 20}{self.bot_token[-10:] if self.bot_token else 'НЕТ'}")
-        print(f"💬 Chat ID: {self.chat_id if self.chat_id else 'НЕТ'}")
+        print(f" Bot Token: {'*' * 20}{self.bot_token[-10:] if self.bot_token else 'НЕТ'}")
+        print(f" Chat ID: {self.chat_id if self.chat_id else 'НЕТ'}")
         
-        # Проверяем что токен и chat_id не пустые
+        #проверяем что токен и chat_id не пустые
         if not self.bot_token:
-            print("❌ ОШИБКА: TELEGRAM_BOT_TOKEN не найден в переменных окружения")
+            print(" ОШИБКА: TELEGRAM_BOT_TOKEN не найден в переменных окружения")
             print("   Проверьте .env файл")
         if not self.chat_id:
-            print("❌ ОШИБКА: TELEGRAM_CHAT_ID не найден в переменных окружения")
+            print(" ОШИБКА: TELEGRAM_CHAT_ID не найден в переменных окружения")
             print("   Проверьте .env файл")
         
-        # Настройки повторных попыток
+        #настройки повторных попыток
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         
-        # Хранилище ошибок
+        #хранилище ошибок
         self._errors = []
         self._lock = threading.Lock()
         
-        # Флаг включения/отключения
+        #флаг включения/отключения
         self.enabled = self._validate_credentials()
         
         if self.enabled:
-            print("✅ Telegram алерты ВКЛЮЧЕНЫ и готовы к работе!")
+            print(" Telegram алерты ВКЛЮЧЕНЫ и готовы к работе!")
             # Тестируем подключение
             self._test_connection()
         else:
-            print("❌ Telegram алерты ОТКЛЮЧЕНЫ")
+            print(" Telegram алерты ОТКЛЮЧЕНЫ")
         
         print("=" * 50)
     
     def _validate_credentials(self):
         """Проверяет корректность учетных данных"""
-        # Проверяем что токен и chat_id не пустые
+        #ароверяем что токен и chat_id не пустые
         if not self.bot_token or not self.chat_id:
-            print(f"⚠️ Не хватает переменных: token={bool(self.bot_token)}, chat_id={bool(self.chat_id)}")
+            print(f" Не хватает переменных: token={bool(self.bot_token)}, chat_id={bool(self.chat_id)}")
             return False
         
-        # Проверяем формат токена (должен содержать :)
+        # проверяем формат токена (должен содержать :)
         if ':' not in self.bot_token:
-            print(f"❌ Неверный формат токена (должен быть вида 123456:ABCdef)")
+            print(f" Неверный формат токена (должен быть вида 123456:ABCdef)")
             return False
         
-        # Проверяем что chat_id - число
+        # проверяем что chat_id - число
         try:
             int(self.chat_id)
         except ValueError:
-            print(f"❌ Chat ID должен быть числом: {self.chat_id}")
+            print(f" Chat ID должен быть числом: {self.chat_id}")
             return False
         
         return True
     
     def _test_connection(self):
-        """Тестирует подключение к Telegram API"""
         try:
-            print("🔍 Тестирую подключение к Telegram API...")
+            print(" Тестирую подключение к Telegram API...")
             url = f"https://api.telegram.org/bot{self.bot_token}/getMe"
             response = requests.get(url, timeout=5)
             
@@ -96,20 +88,19 @@ class TelegramAlerts:
                 data = response.json()
                 if data.get('ok'):
                     bot_info = data['result']
-                    print(f"✅ Бот подключен: {bot_info.get('first_name')} (@{bot_info.get('username')})")
+                    print(f" Бот подключен: {bot_info.get('first_name')} (@{bot_info.get('username')})")
                     return True
                 else:
-                    print(f"❌ Telegram API вернул ошибку: {data.get('description')}")
+                    print(f" Telegram API вернул ошибку: {data.get('description')}")
             else:
-                print(f"❌ HTTP ошибка: {response.status_code}")
+                print(f" HTTP ошибка: {response.status_code}")
                 
         except Exception as e:
-            print(f"❌ Ошибка подключения: {e}")
+            print(f"Ошибка подключения: {e}")
         
         return False
     
     def _send_telegram_request(self, method, payload):
-        """ОСНОВНАЯ ФУНКЦИЯ ОТПРАВКИ ЗАПРОСА К TELEGRAM API"""
         if not self.enabled:
             return False, {'error': 'Telegram alerts disabled'}
         
@@ -117,7 +108,7 @@ class TelegramAlerts:
         
         for attempt in range(self.max_retries):
             try:
-                logger.debug(f"📤 Отправка запроса к Telegram API (попытка {attempt + 1}/{self.max_retries})")
+                logger.debug(f" Отправка запроса к Telegram API (попытка {attempt + 1}/{self.max_retries})")
                 
                 response = requests.post(
                     url,
@@ -148,7 +139,7 @@ class TelegramAlerts:
                     time.sleep(self.retry_delay)
                     continue
                 
-                logger.debug("✅ Запрос к Telegram API успешен")
+                logger.debug(" Запрос к Telegram API успешен")
                 return True, result
                 
             except requests.exceptions.Timeout:
@@ -187,27 +178,27 @@ class TelegramAlerts:
     
     def _send_startup_notification(self):
         """ОТПРАВЛЯЕТ УВЕДОМЛЕНИЕ О ЗАПУСКЕ СЕРВЕРА"""
-        print("🚀 Отправляю уведомление о запуске сервера...")
+        print(" Отправляю уведомление о запуске сервера...")
         
-        startup_message = f"""🚀 *PhishGuard Server Started Successfully!*
+        startup_message = f""" PhishGuard Server Started Successfully!
 
-*Server Info:*
+Server Info:
 • Environment: `{os.environ.get('ENV', 'development')}`
 • Start Time: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`
 • Port: `{os.environ.get('PORT', '5000')}`
 
 *Features Active:*
-✅ Telegram Alerts
-✅ HMAC Authentication
-✅ Rate Limiting
-✅ Security Headers
+ Telegram Alerts
+ HMAC Authentication
+ Rate Limiting
+ Security Headers
 
 _Это автоматическое сообщение при запуске сервера._"""
         
         success = self.send_message(startup_message, 'success')
         
         if success:
-            print("✅ Уведомление о запуске отправлено в Telegram!")
+            print(" Уведомление о запуске отправлено в Telegram!")
         else:
             print("❌ Не удалось отправить уведомление о запуске")
     
@@ -218,15 +209,15 @@ _Это автоматическое сообщение при запуске с
             return True
         
         emoji_map = {
-            'critical': '🔴',
-            'error': '🟠',
-            'warning': '🟡',
-            'info': '🔵',
-            'success': '🟢',
-            'debug': '⚪'
+            'critical': '',
+            'error': '',
+            'warning': '',
+            'info': '',
+            'success': '',
+            'debug': ''
         }
         
-        emoji = emoji_map.get(level.lower(), '⚪')
+        emoji = emoji_map.get(level.lower(), '')
         formatted_text = f"{emoji} {text}"
         
         if len(formatted_text) > 4000:
@@ -244,10 +235,10 @@ _Это автоматическое сообщение при запуске с
         success, response = self._send_telegram_request('sendMessage', payload)
         
         if success:
-            logger.info(f"✅ Telegram сообщение отправлено (уровень: {level})")
+            logger.info(f" Telegram сообщение отправлено (уровень: {level})")
             return True
         else:
-            logger.error(f"❌ Не удалось отправить Telegram сообщение: {response.get('error', 'Unknown')}")
+            logger.error(f" Не удалось отправить Telegram сообщение: {response.get('error', 'Unknown')}")
             return False
     
     def send_alert(self, title, description, level='warning', details=None):
@@ -273,7 +264,7 @@ _Это автоматическое сообщение при запуске с
     
     def send_error(self, exception, context=None):
         """ОТПРАВЛЯЕТ АЛЕРТ ОБ ОШИБКЕ"""
-        error_title = "🚨 Server Error Detected"
+        error_title = " Server Error Detected"
         
         error_description = f"""*Error Type:* `{type(exception).__name__}`
 *Error Message:* `{str(exception)}`"""
@@ -298,13 +289,13 @@ _Это автоматическое сообщение при запуске с
     def send_security_alert(self, threat_type, url, user_id, severity='high'):
         """ОТПРАВЛЯЕТ АЛЕРТ ОБ УГРОЗЕ БЕЗОПАСНОСТИ"""
         severity_emoji = {
-            'low': '🟢',
-            'medium': '🟡', 
-            'high': '🟠',
-            'critical': '🔴'
+            'low': '',
+            'medium': '', 
+            'high': '',
+            'critical': ''
         }
         
-        emoji = severity_emoji.get(severity, '⚪')
+        emoji = severity_emoji.get(severity, '')
         alert_title = f"{emoji} Security Threat: {threat_type}"
         
         display_url = url
@@ -313,7 +304,7 @@ _Это автоматическое сообщение при запуске с
         
         alert_description = f"""*Threat Detected:* `{threat_type}`
 *Severity:* `{severity.upper()}`
-*Action:* `BLOCKED` 🚫
+*Action:* `BLOCKED` 
 
 Threat has been automatically blocked by PhishGuard system."""
         
@@ -384,7 +375,7 @@ Threat has been automatically blocked by PhishGuard system."""
         with self._lock:
             return self._errors[-limit:] if self._errors else []
 
-# ДЕКОРАТОР ДЛЯ ОТСЛЕЖИВАНИЯ ОШИБОК ФУНКЦИЙ
+#декоратор для отслеж функций
 def telegram_alert_on_error(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
@@ -393,7 +384,7 @@ def telegram_alert_on_error(func):
             return result
             
         except Exception as e:
-            # Создаем новый экземпляр для отправки ошибки
+            # экземпляр для отправки ошибки
             try:
                 alerts = TelegramAlerts()
                 if alerts.enabled:
@@ -404,17 +395,17 @@ def telegram_alert_on_error(func):
                     }
                     alerts.send_error(e, context)
             except:
-                pass  # Если не удалось отправить алерт, просто логируем
+                pass  
             
             raise
     
     return wrapper
 
-# СОЗДАЕМ ГЛОБАЛЬНЫЙ ЭКЗЕМПЛЯР ПРИ ИМПОРТЕ
+# глоб экземпляр при импорте
 try:
     telegram_alerts = TelegramAlerts()
-    print(f"✅ Глобальный экземпляр telegram_alerts создан: enabled={telegram_alerts.enabled}")
+    print(f" Глобальный экземпляр telegram_alerts создан: enabled={telegram_alerts.enabled}")
 except Exception as e:
-    print(f"❌ Ошибка создания глобального экземпляра: {e}")
+    print(f" Ошибка создания глобального экземпляра: {e}")
     telegram_alerts = None
 
